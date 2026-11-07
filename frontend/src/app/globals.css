@@ -1,0 +1,176 @@
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
+
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+  --ring: #4f46e5;
+
+  /* Default Primary / Brand Color: Indigo */
+  --primary: #4f46e5;
+  --primary-foreground: #ffffff;
+  --primary-50: #eef2ff;
+  --primary-100: #e0e7ff;
+  --primary-200: #c7d2fe;
+  --primary-300: #a5b4fc;
+  --primary-400: #818cf8;
+  --primary-500: #6366f1;
+  --primary-600: #4f46e5;
+  --primary-700: #4338ca;
+  --primary-800: #3730a3;
+  --primary-900: #312e81;
+  --primary-950: #1e1b4b;
+
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+
+  color-scheme: light;
+}
+
+.dark, [data-theme="dark"] {
+  --background: #020617;
+  --foreground: #f8fafc;
+  --card: #0f172a;
+  --card-foreground: #f8fafc;
+  --border: #1e293b;
+  --input: #1e293b;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --accent: #1e293b;
+  --accent-foreground: #f8fafc;
+  --ring: #6366f1;
+
+  /* Default Primary / Brand Color: Indigo */
+  --primary: #6366f1;
+  --primary-foreground: #ffffff;
+  --primary-50: #1e1b4b;
+  --primary-100: #312e81;
+  --primary-200: #3730a3;
+  --primary-300: #4338ca;
+  --primary-400: #4f46e5;
+  --primary-500: #6366f1;
+  --primary-600: #818cf8;
+  --primary-700: #a5b4fc;
+  --primary-800: #c7d2fe;
+  --primary-900: #e0e7ff;
+  --primary-950: #eef2ff;
+
+  --destructive: #7f1d1d;
+  --destructive-foreground: #f8fafc;
+  --secondary: #1e293b;
+  --secondary-foreground: #f8fafc;
+  --popover: #0f172a;
+  --popover-foreground: #f8fafc;
+
+  color-scheme: dark;
+}
+
+/* Dynamic Primary Color Palette Themes */
+[data-color="purple"] {
+  --primary: #9333ea;
+  --primary-600: #9333ea;
+  --ring: #9333ea;
+}
+.dark[data-color="purple"], [data-theme="dark"][data-color="purple"] {
+  --primary: #a855f7;
+  --primary-600: #a855f7;
+  --ring: #a855f7;
+}
+
+[data-color="blue"] {
+  --primary: #2563eb;
+  --primary-600: #2563eb;
+  --ring: #2563eb;
+}
+.dark[data-color="blue"], [data-theme="dark"][data-color="blue"] {
+  --primary: #3b82f6;
+  --primary-600: #3b82f6;
+  --ring: #3b82f6;
+}
+
+[data-color="emerald"] {
+  --primary: #059669;
+  --primary-600: #059669;
+  --ring: #059669;
+}
+.dark[data-color="emerald"], [data-theme="dark"][data-color="emerald"] {
+  --primary: #10b981;
+  --primary-600: #10b981;
+  --ring: #10b981;
+}
+
+[data-color="amber"] {
+  --primary: #d97706;
+  --primary-600: #d97706;
+  --ring: #d97706;
+}
+.dark[data-color="amber"], [data-theme="dark"][data-color="amber"] {
+  --primary: #f59e0b;
+  --primary-600: #f59e0b;
+  --ring: #f59e0b;
+}
+
+[data-color="rose"] {
+  --primary: #e11d48;
+  --primary-600: #e11d48;
+  --ring: #e11d48;
+}
+.dark[data-color="rose"], [data-theme="dark"][data-color="rose"] {
+  --primary: #f43f5e;
+  --primary-600: #f43f5e;
+  --ring: #f43f5e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+@keyframes scan {
+  0% {
+    top: 5%;
+    opacity: 0.8;
+  }
+  50% {
+    top: 90%;
+    opacity: 1;
+  }
+  100% {
+    top: 5%;
+    opacity: 0.8;
+  }
+}
