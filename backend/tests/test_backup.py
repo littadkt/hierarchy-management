@@ -134,3 +134,34 @@ async def test_backup_restore_upload_super_admin(async_client: AsyncClient):
 
     # Clean up test snapshot
     await async_client.delete(f"/api/v1/backup/{created_filename}", headers=sa_headers)
+
+
+@pytest.mark.asyncio
+async def test_backup_restore_existing_super_admin(async_client: AsyncClient):
+    """Verify Super Admin can restore database directly from an existing backup in local storage"""
+    # 1. Login as Super Admin
+    sa_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "superadmin@example.com", "password": "SuperAdmin@123"},
+    )
+    assert sa_login.status_code == 200
+    sa_token = sa_login.json()["access_token"]
+    sa_headers = {"Authorization": f"Bearer {sa_token}"}
+
+    # 2. Create a snapshot backup
+    create_res = await async_client.post("/api/v1/backup/create", headers=sa_headers)
+    assert create_res.status_code == 200
+    created_filename = create_res.json()["filename"]
+
+    # 3. Restore directly from existing filename
+    restore_res = await async_client.post(
+        f"/api/v1/backup/restore/existing/{created_filename}",
+        headers=sa_headers,
+    )
+    assert restore_res.status_code == 200
+    restore_data = restore_res.json()
+    assert restore_data["success"] is True
+    assert restore_data["restored_file"] == created_filename
+
+    # Clean up test snapshot
+    await async_client.delete(f"/api/v1/backup/{created_filename}", headers=sa_headers)

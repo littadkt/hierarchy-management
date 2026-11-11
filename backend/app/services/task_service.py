@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import uuid
 from fastapi import HTTPException, status
 from sqlalchemy import and_, desc, func, or_, select
@@ -17,6 +17,7 @@ from app.core.permissions import (
 from app.models.task import RecurrencePattern, Task, TaskPriority, TaskStatus
 from app.models.task_activity import ActivityAction, TaskActivity
 from app.models.task_comment import TaskComment
+from app.models.attachment import TaskAttachment
 from app.models.subtask import Subtask
 from app.models.user import Role, User
 from app.schemas.approval import ApprovalAction, ApprovalDecision, SubmitForApproval
@@ -44,6 +45,8 @@ class TaskService:
                 selectinload(Task.comments).selectinload(TaskComment.user),
                 selectinload(Task.subtasks).selectinload(Subtask.assigned_to),
                 selectinload(Task.subtasks).selectinload(Subtask.created_by),
+                selectinload(Task.subtasks).selectinload(Subtask.attachments).selectinload(TaskAttachment.uploaded_by),
+                selectinload(Task.attachments).selectinload(TaskAttachment.uploaded_by),
             )
         )
         result = await session.execute(stmt)
@@ -252,6 +255,8 @@ class TaskService:
             selectinload(Task.created_by),
             selectinload(Task.assigned_to),
             selectinload(Task.approver),
+            selectinload(Task.subtasks),
+            selectinload(Task.attachments),
         )
 
         # Role-based visibility scoping
@@ -408,11 +413,273 @@ class TaskService:
         total_count = (await session.execute(count_stmt)).scalar() or 0
 
         # Pagination & sorting
-        stmt = stmt.order_by(desc(Task.created_at)).offset(skip).limit(limit)
+        stmt = stmt.order_by(Task.order_index.asc(), desc(Task.created_at)).offset(skip).limit(limit)
         result = await session.execute(stmt)
         tasks = result.scalars().all()
 
         return tasks, total_count
+
+    @staticmethod
+    async def get_performance_stats(
+        session: AsyncSession,
+        current_user: User,
+        user_id: Optional[uuid.UUID] = None,
+        branch: Optional[str] = None,
+        department: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Calculate comprehensive task and subtask performance metrics scoped by hierarchy.
+        """
+        # Ensure recurring tasks are spawned
+        try:
+            await TaskService.spawn_due_recurring_tasks(session)
+        except Exception:
+            pass
+
+        stmt = (
+            select(Task)
+            .options(
+                selectinload(Task.subtasks),
+                selectinload(Task.assigned_to),
+            )
+        )
+
+        scope_label = "organization"
+
+        # Apply hierarchical scoping
+        if current_user.role == Role.STAFF:
+            scope_label = "personal"
+            stmt = stmt.where(
+                or_(
+                    Task.assigned_to_id == current_user.id,
+                    Task.created_by_id == current_user.id,
+                )
+            )
+        elif current_user.role == Role.TEAM_LEADER:
+            scope_label = "team"
+            tl_dept = (current_user.department or "").strip()
+            tl_branch = (current_user.branch or "").strip()
+            staff_ids_stmt = select(User.id).where(User.role == Role.STAFF)
+            if tl_dept:
+                staff_ids_stmt = staff_ids_stmt.where(
+                    or_(
+                        func.lower(func.trim(User.department)) == tl_dept.lower(),
+                        User.reports_to_id == current_user.id,
+                    )
+                )
+                if tl_branch:
+                    staff_ids_stmt = staff_ids_stmt.where(
+                        or_(
+                            User.branch == None,
+                            func.lower(func.trim(User.branch)) == tl_branch.lower(),
+                            User.reports_to_id == current_user.id,
+                        )
+                    )
+            else:
+                staff_ids_stmt = staff_ids_stmt.where(User.reports_to_id == current_user.id)
+
+            stmt = stmt.where(
+                or_(
+                    Task.assigned_to_id == current_user.id,
+                    Task.created_by_id == current_user.id,
+                    Task.approver_id == current_user.id,
+                    Task.assigned_to_id.in_(staff_ids_stmt),
+                )
+            )
+        elif current_user.role == Role.IN_CHARGE:
+            scope_label = "department"
+            ic_dept = (current_user.department or "").strip()
+            ic_branch = (current_user.branch or "").strip()
+            sub_ids_stmt = select(User.id).where(User.role.in_([Role.TEAM_LEADER, Role.STAFF]))
+            if ic_dept:
+                sub_ids_stmt = sub_ids_stmt.where(
+                    or_(
+                        func.lower(func.trim(User.department)) == ic_dept.lower(),
+                        User.reports_to_id == current_user.id,
+                    )
+                )
+                if ic_branch:
+                    sub_ids_stmt = sub_ids_stmt.where(
+                        or_(
+                            User.branch == None,
+                            func.lower(func.trim(User.branch)) == ic_branch.lower(),
+                            User.reports_to_id == current_user.id,
+                        )
+                    )
+            else:
+                sub_ids_stmt = sub_ids_stmt.where(User.reports_to_id == current_user.id)
+
+            stmt = stmt.where(
+                or_(
+                    Task.assigned_to_id == current_user.id,
+                    Task.created_by_id == current_user.id,
+                    Task.approver_id == current_user.id,
+                    Task.assigned_to_id.in_(sub_ids_stmt),
+                )
+            )
+        elif current_user.role == Role.ADMIN:
+            scope_label = "organization"
+            admin_branch = (current_user.branch or "").strip()
+            if admin_branch:
+                scope_label = "branch"
+
+        # Apply specific filters if requested
+        if user_id:
+            stmt = stmt.where(Task.assigned_to_id == user_id)
+        if branch:
+            stmt = stmt.join(Task.assigned_to).where(func.lower(func.trim(User.branch)) == branch.strip().lower())
+        if department:
+            stmt = stmt.join(Task.assigned_to).where(func.lower(func.trim(User.department)) == department.strip().lower())
+
+        res = await session.execute(stmt)
+        tasks = list(res.scalars().all())
+
+        now = datetime.now(timezone.utc)
+
+        total_tasks = len(tasks)
+        completed_tasks = sum(1 for t in tasks if t.status == TaskStatus.COMPLETED)
+        in_progress_tasks = sum(1 for t in tasks if t.status == TaskStatus.IN_PROGRESS)
+        pending_tasks = sum(1 for t in tasks if t.status == TaskStatus.PENDING)
+        pending_approval_tasks = sum(1 for t in tasks if t.status == TaskStatus.PENDING_APPROVAL)
+        cancelled_tasks = sum(1 for t in tasks if t.status == TaskStatus.CANCELLED)
+
+        overdue_tasks = sum(
+            1 for t in tasks
+            if t.due_date and t.due_date < now and t.status not in [TaskStatus.COMPLETED, TaskStatus.CANCELLED]
+        )
+        on_time_completed_tasks = sum(
+            1 for t in tasks
+            if t.status == TaskStatus.COMPLETED and (not t.due_date or not t.completed_at or t.completed_at <= t.due_date)
+        )
+
+        active_tasks = total_tasks - cancelled_tasks
+        task_completion_rate = round((completed_tasks / active_tasks * 100), 1) if active_tasks > 0 else 0.0
+        on_time_rate = round((on_time_completed_tasks / completed_tasks * 100), 1) if completed_tasks > 0 else (100.0 if completed_tasks == 0 and overdue_tasks == 0 else 0.0)
+
+        # Subtasks across all tasks
+        all_subtasks: List[Subtask] = []
+        for t in tasks:
+            if t.subtasks:
+                all_subtasks.extend(t.subtasks)
+
+        total_subtasks = len(all_subtasks)
+        completed_subtasks = sum(1 for s in all_subtasks if s.is_completed)
+        pending_subtasks = total_subtasks - completed_subtasks
+        subtask_completion_rate = round((completed_subtasks / total_subtasks * 100), 1) if total_subtasks > 0 else (100.0 if completed_tasks > 0 else 0.0)
+        avg_subtasks_per_task = round(total_subtasks / total_tasks, 1) if total_tasks > 0 else 0.0
+
+        # Overall composite score combining tasks and subtasks
+        if active_tasks > 0 and total_subtasks > 0:
+            overall_performance_score = round(0.5 * task_completion_rate + 0.5 * subtask_completion_rate, 1)
+        elif active_tasks > 0:
+            overall_performance_score = task_completion_rate
+        elif total_subtasks > 0:
+            overall_performance_score = subtask_completion_rate
+        else:
+            overall_performance_score = 0.0
+
+        # Team performance breakdown
+        user_map: Dict[uuid.UUID, Dict[str, Any]] = {}
+        for t in tasks:
+            assignee = t.assigned_to
+            if not assignee:
+                continue
+            uid = assignee.id
+            if uid not in user_map:
+                user_map[uid] = {
+                    "user_id": str(assignee.id),
+                    "full_name": assignee.full_name,
+                    "role": assignee.role.value if hasattr(assignee.role, "value") else str(assignee.role),
+                    "branch": assignee.branch,
+                    "department": assignee.department,
+                    "tasks_assigned": 0,
+                    "tasks_completed": 0,
+                    "tasks_in_progress": 0,
+                    "tasks_pending": 0,
+                    "tasks_overdue": 0,
+                    "tasks_cancelled": 0,
+                    "subtasks_total": 0,
+                    "subtasks_completed": 0,
+                }
+            u = user_map[uid]
+            u["tasks_assigned"] += 1
+            if t.status == TaskStatus.COMPLETED:
+                u["tasks_completed"] += 1
+            elif t.status == TaskStatus.IN_PROGRESS:
+                u["tasks_in_progress"] += 1
+            elif t.status == TaskStatus.PENDING:
+                u["tasks_pending"] += 1
+            elif t.status == TaskStatus.CANCELLED:
+                u["tasks_cancelled"] += 1
+
+            if t.due_date and t.due_date < now and t.status not in [TaskStatus.COMPLETED, TaskStatus.CANCELLED]:
+                u["tasks_overdue"] += 1
+
+            if t.subtasks:
+                for st in t.subtasks:
+                    u["subtasks_total"] += 1
+                    if st.is_completed:
+                        u["subtasks_completed"] += 1
+
+        team_performance = []
+        for entry in user_map.values():
+            u_act = entry["tasks_assigned"] - entry["tasks_cancelled"]
+            u_t_rate = round((entry["tasks_completed"] / u_act * 100), 1) if u_act > 0 else 0.0
+            u_st_rate = round((entry["subtasks_completed"] / entry["subtasks_total"] * 100), 1) if entry["subtasks_total"] > 0 else (100.0 if entry["tasks_completed"] > 0 else 0.0)
+
+            if u_act > 0 and entry["subtasks_total"] > 0:
+                u_score = round(0.5 * u_t_rate + 0.5 * u_st_rate, 1)
+            elif u_act > 0:
+                u_score = u_t_rate
+            elif entry["subtasks_total"] > 0:
+                u_score = u_st_rate
+            else:
+                u_score = 0.0
+
+            team_performance.append({
+                "user_id": entry["user_id"],
+                "full_name": entry["full_name"],
+                "role": entry["role"],
+                "branch": entry["branch"],
+                "department": entry["department"],
+                "tasks_assigned": entry["tasks_assigned"],
+                "tasks_completed": entry["tasks_completed"],
+                "tasks_in_progress": entry["tasks_in_progress"],
+                "tasks_pending": entry["tasks_pending"],
+                "tasks_overdue": entry["tasks_overdue"],
+                "task_completion_rate": u_t_rate,
+                "subtasks_total": entry["subtasks_total"],
+                "subtasks_completed": entry["subtasks_completed"],
+                "subtask_completion_rate": u_st_rate,
+                "overall_performance_score": u_score,
+            })
+
+        team_performance.sort(key=lambda x: (x["overall_performance_score"], x["tasks_completed"]), reverse=True)
+
+        return {
+            "scope": scope_label,
+            "overall_performance_score": overall_performance_score,
+            "task_metrics": {
+                "total_tasks": total_tasks,
+                "completed_tasks": completed_tasks,
+                "in_progress_tasks": in_progress_tasks,
+                "pending_tasks": pending_tasks,
+                "pending_approval_tasks": pending_approval_tasks,
+                "cancelled_tasks": cancelled_tasks,
+                "overdue_tasks": overdue_tasks,
+                "on_time_completed_tasks": on_time_completed_tasks,
+                "task_completion_rate": task_completion_rate,
+                "on_time_rate": on_time_rate,
+            },
+            "subtask_metrics": {
+                "total_subtasks": total_subtasks,
+                "completed_subtasks": completed_subtasks,
+                "pending_subtasks": pending_subtasks,
+                "subtask_completion_rate": subtask_completion_rate,
+                "avg_subtasks_per_task": avg_subtasks_per_task,
+            },
+            "team_performance": team_performance,
+        }
 
     @staticmethod
     async def update_task(
@@ -657,6 +924,246 @@ class TaskService:
         return deleted_count
 
     @staticmethod
+    async def reorder_tasks(
+        session: AsyncSession,
+        operator: User,
+        task_ids: List[uuid.UUID],
+    ) -> None:
+        """Update display order_index for a list of task IDs"""
+        if not task_ids:
+            return
+        for index, task_id in enumerate(task_ids):
+            stmt = select(Task).where(Task.id == task_id)
+            res = await session.execute(stmt)
+            task = res.scalar_one_or_none()
+            if task:
+                task.order_index = index
+        await session.commit()
+
+    @staticmethod
+    async def get_subordinate_users(
+        session: AsyncSession,
+        user: User,
+    ) -> List[User]:
+        """
+        Returns all active users who are direct or indirect subordinates of `user`
+        according to the organizational hierarchy:
+        Level 1: SUPER_ADMIN
+        Level 2: ADMIN
+        Level 3: IN_CHARGE
+        Level 4: TEAM_LEADER
+        Level 5: STAFF (no subordinates)
+        """
+        if user.role == Role.STAFF:
+            return []
+
+        stmt = select(User).where(User.is_active == True)
+        res = await session.execute(stmt)
+        all_users = list(res.scalars().all())
+        user_map = {u.id: u for u in all_users}
+
+        if user.role == Role.SUPER_ADMIN:
+            # Super Admin is at the top of the hierarchy; all active non-superadmins are subordinates
+            return [u for u in all_users if u.id != user.id and u.role != Role.SUPER_ADMIN]
+
+        # Build map of manager_id -> direct reports
+        reports_map: Dict[uuid.UUID, List[User]] = {}
+        for u in all_users:
+            if u.reports_to_id:
+                reports_map.setdefault(u.reports_to_id, []).append(u)
+
+        subordinate_ids: Set[uuid.UUID] = set()
+
+        u_dept = (user.department or "").strip().lower()
+        u_branch = (user.branch or "").strip().lower()
+
+        # 1. Direct reports whose hierarchy level is below user
+        for report in reports_map.get(user.id, []):
+            if report.role.level > user.role.level:
+                subordinate_ids.add(report.id)
+
+        # 2. Scope-based subordinates (by role, department, and branch)
+        for u in all_users:
+            if u.id == user.id or u.role.level <= user.role.level:
+                continue
+
+            sub_dept = (u.department or "").strip().lower()
+            sub_branch = (u.branch or "").strip().lower()
+
+            if user.role == Role.TEAM_LEADER:
+                # Team Leader oversees Staff under same department (and branch if configured)
+                if u.role == Role.STAFF:
+                    dept_match = (sub_dept == u_dept) if u_dept and sub_dept else (not u_dept)
+                    branch_match = (sub_branch == u_branch) if u_branch and sub_branch else True
+                    if dept_match and branch_match:
+                        subordinate_ids.add(u.id)
+
+            elif user.role == Role.IN_CHARGE:
+                # In-Charge oversees Team Leaders and Staff under same department (and branch if configured)
+                if u.role in [Role.TEAM_LEADER, Role.STAFF]:
+                    dept_match = (sub_dept == u_dept) if u_dept and sub_dept else (not u_dept)
+                    branch_match = (sub_branch == u_branch) if u_branch and sub_branch else True
+                    if dept_match and branch_match:
+                        subordinate_ids.add(u.id)
+
+            elif user.role == Role.ADMIN:
+                # Admin oversees In-Charge, Team Leaders, and Staff (within branch if configured)
+                if u.role in [Role.IN_CHARGE, Role.TEAM_LEADER, Role.STAFF]:
+                    branch_match = (sub_branch == u_branch) if u_branch and sub_branch else True
+                    if branch_match:
+                        subordinate_ids.add(u.id)
+
+        # 3. Recursively add any lower-level users reporting down the lineage
+        queue = list(subordinate_ids)
+        while queue:
+            curr_id = queue.pop(0)
+            for child in reports_map.get(curr_id, []):
+                if child.id not in subordinate_ids and child.role.level > user.role.level:
+                    subordinate_ids.add(child.id)
+                    queue.append(child.id)
+
+        return [user_map[uid] for uid in subordinate_ids if uid in user_map]
+
+    @staticmethod
+    async def get_subordinate_today_task_status(
+        session: AsyncSession,
+        user: User,
+    ) -> Dict[str, Any]:
+        """
+        Returns whether `user` is eligible to complete or submit their task for approval
+        based on the status of their subordinates' today's tasks.
+        Hierarchy Rule:
+        "if a staff didnt complete or not submitted for approval todays recurring task or task with todays due date
+         the team leader couldnt compete their task or submit thier task for approval completely and so on for all the top level"
+        """
+        if user.role == Role.STAFF:
+            return {
+                "can_complete_or_submit": True,
+                "subordinates_count": 0,
+                "pending_tasks_count": 0,
+                "pending_tasks": [],
+            }
+
+        try:
+            await TaskService.spawn_due_recurring_tasks(session)
+        except Exception:
+            pass
+
+        subordinates = await TaskService.get_subordinate_users(session, user)
+        if not subordinates:
+            return {
+                "can_complete_or_submit": True,
+                "subordinates_count": 0,
+                "pending_tasks_count": 0,
+                "pending_tasks": [],
+            }
+
+        local_now = datetime.now().astimezone()
+        today_local = local_now.strftime("%Y-%m-%d")
+        today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_dates = {today_local, today_utc}
+
+        # Exclude subordinates who are marked on leave for today
+        # Hierarchy rule: "if a staff is marked as leave that didnt make a restriction for their team leaders
+        # complete or submit for approval and so on for all the top level"
+        active_subordinates = [
+            s for s in subordinates
+            if not (s.is_on_leave and (not s.leave_date or s.leave_date in today_dates or s.leave_date >= min(today_dates)))
+        ]
+
+        if not active_subordinates:
+            return {
+                "can_complete_or_submit": True,
+                "subordinates_count": len(subordinates),
+                "pending_tasks_count": 0,
+                "pending_tasks": [],
+            }
+
+        subordinate_ids = [s.id for s in active_subordinates]
+
+        local_now = datetime.now().astimezone()
+        start_of_today = datetime(local_now.year, local_now.month, local_now.day, 0, 0, 0, tzinfo=local_now.tzinfo)
+        end_of_today = datetime(local_now.year, local_now.month, local_now.day, 23, 59, 59, 999999, tzinfo=local_now.tzinfo)
+
+        parent_ids_with_children = select(Task.parent_task_id).where(Task.parent_task_id != None)
+
+        pending_tasks_stmt = (
+            select(Task)
+            .options(selectinload(Task.assigned_to))
+            .where(
+                Task.assigned_to_id.in_(subordinate_ids),
+                Task.status.in_([TaskStatus.PENDING, TaskStatus.IN_PROGRESS]),
+                ~and_(Task.is_recurring == True, Task.parent_task_id == None, Task.id.in_(parent_ids_with_children)),
+                or_(
+                    and_(Task.due_date >= start_of_today, Task.due_date <= end_of_today),
+                    and_(Task.due_date == None, Task.created_at >= start_of_today, Task.created_at <= end_of_today),
+                    and_(
+                        Task.is_recurring == True,
+                        or_(
+                            and_(Task.due_date >= start_of_today, Task.due_date <= end_of_today),
+                            and_(Task.parent_task_id == None, Task.created_at >= start_of_today, Task.created_at <= end_of_today),
+                        ),
+                    ),
+                ),
+            )
+            .order_by(Task.due_date.asc().nulls_last(), Task.created_at.asc())
+        )
+
+        res = await session.execute(pending_tasks_stmt)
+        uncompleted = list(res.scalars().all())
+
+        pending_list = []
+        for t in uncompleted:
+            pending_list.append({
+                "id": str(t.id),
+                "title": t.title,
+                "status": t.status.value,
+                "assigned_to_id": str(t.assigned_to_id),
+                "assigned_to_name": t.assigned_to.full_name if t.assigned_to else "Subordinate",
+                "assigned_to_role": t.assigned_to.role.value if (t.assigned_to and hasattr(t.assigned_to.role, "value")) else "",
+                "due_date": t.due_date.isoformat() if t.due_date else None,
+            })
+
+        return {
+            "can_complete_or_submit": len(uncompleted) == 0,
+            "subordinates_count": len(subordinates),
+            "pending_tasks_count": len(uncompleted),
+            "pending_tasks": pending_list,
+        }
+
+    @staticmethod
+    async def validate_subordinates_today_tasks_completed(
+        session: AsyncSession,
+        user: User,
+        task: Task,
+    ) -> None:
+        """
+        Validates hierarchy restriction:
+        "if a staff didnt complete or not submitted for approval todays recurring task or task with todays due date
+         the team leader couldnt compete their task or submit thier task for approval completely and so on for all the top level"
+        """
+        status_data = await TaskService.get_subordinate_today_task_status(session, user)
+        if status_data["can_complete_or_submit"]:
+            return
+
+        pending_tasks = status_data["pending_tasks"]
+        details = []
+        for t in pending_tasks[:5]:
+            sub_name = t.get("assigned_to_name", "Subordinate")
+            sub_role = t.get("assigned_to_role", "")
+            role_str = f" ({sub_role})" if sub_role else ""
+            details.append(f"• {sub_name}{role_str}: '{t.get('title')}' [Status: {t.get('status')}]")
+
+        more = len(pending_tasks) - len(details)
+        more_str = f"\n  ...and {more} more pending task(s)" if more > 0 else ""
+
+        raise HierarchyPermissionError(
+            "Hierarchy Restriction: You cannot complete or submit this task for approval until all subordinates "
+            "have completed or submitted for approval today's recurring tasks and tasks due today.\n"
+            "Pending subordinate tasks:\n" + "\n".join(details) + more_str
+        )
+
+    @staticmethod
     async def update_task_status(
         session: AsyncSession,
         operator: User,
@@ -672,6 +1179,15 @@ class TaskService:
 
         # Validate permission for status transition
         validate_status_transition(operator, task, status_update.status)
+
+        # Hierarchy Restriction: Subordinates must complete/submit today's recurring tasks or tasks due today
+        if status_update.status in [TaskStatus.COMPLETED, TaskStatus.PENDING_APPROVAL]:
+            target_user = task.assigned_to
+            if not target_user:
+                target_user = await UserService.get_by_id(session, task.assigned_to_id)
+            await TaskService.validate_subordinates_today_tasks_completed(
+                session, target_user or operator, task
+            )
 
         old_status = task.status
         new_status = status_update.status
@@ -748,6 +1264,14 @@ class TaskService:
         # Assignee or creator or Super Admin can submit for approval
         if operator.id not in [task.assigned_to_id, task.created_by_id] and operator.role != Role.SUPER_ADMIN:
             raise HierarchyPermissionError("Only the assignee, creator, or Super Admin can submit this task for approval.")
+
+        # Hierarchy Restriction: Subordinates must complete/submit today's recurring tasks or tasks due today
+        target_user = task.assigned_to
+        if not target_user:
+            target_user = await UserService.get_by_id(session, task.assigned_to_id)
+        await TaskService.validate_subordinates_today_tasks_completed(
+            session, target_user or operator, task
+        )
 
         old_status = task.status
         task.status = TaskStatus.PENDING_APPROVAL
@@ -831,6 +1355,14 @@ class TaskService:
         old_status = task.status
 
         if decision.action == ApprovalAction.APPROVE:
+            # Hierarchy Restriction: Subordinates must complete/submit today's recurring tasks or tasks due today
+            target_user = task.assigned_to
+            if not target_user:
+                target_user = await UserService.get_by_id(session, task.assigned_to_id)
+            await TaskService.validate_subordinates_today_tasks_completed(
+                session, target_user or operator, task
+            )
+
             task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now(timezone.utc)
             action_type = ActivityAction.APPROVED

@@ -16,12 +16,19 @@ import {
   CheckSquare,
   Users,
   User as UserIcon,
+  Paperclip,
+  GripVertical,
+  ChevronUp,
+  ChevronDown,
+  TrendingUp,
+  Award,
+  ListTodo,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
-import { tasksApi, usersApi, getErrorMessage } from "@/lib/api";
-import { Task, TaskPriority, TaskStatus, UserBrief } from "@/lib/types";
+import { tasksApi, usersApi, statsApi, getErrorMessage } from "@/lib/api";
+import { Task, TaskPriority, TaskStatus, UserBrief, TaskPerformanceStats } from "@/lib/types";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { RoleBadge } from "@/components/RoleBadge";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -30,7 +37,7 @@ import { TaskDetailModal } from "@/components/TaskDetailModal";
 import { EditTaskModal } from "@/components/EditTaskModal";
 
 export default function TasksPage() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const { confirm, alert } = useConfirm();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [total, setTotal] = useState(0);
@@ -38,6 +45,8 @@ export default function TasksPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [performanceStats, setPerformanceStats] = useState<TaskPerformanceStats | null>(null);
+  const [showPerfSummary, setShowPerfSummary] = useState(true);
 
   // Filters
   const [search, setSearch] = useState("");
@@ -96,6 +105,84 @@ export default function TasksPage() {
     setSelectedTaskIds((prev) =>
       prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
     );
+  };
+
+  // Drag and drop task reordering state
+  const [draggedTaskIndex, setDraggedTaskIndex] = useState<number | null>(null);
+  const [dragOverTaskIndex, setDragOverTaskIndex] = useState<number | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedTaskIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", index.toString());
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverTaskIndex !== index) {
+      setDragOverTaskIndex(index);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (draggedTaskIndex === null || draggedTaskIndex === targetIndex) {
+      setDraggedTaskIndex(null);
+      setDragOverTaskIndex(null);
+      return;
+    }
+
+    const previousTasks = [...tasks];
+    const reordered = [...tasks];
+    const [movedItem] = reordered.splice(draggedTaskIndex, 1);
+    reordered.splice(targetIndex, 0, movedItem);
+
+    setTasks(reordered);
+    setDraggedTaskIndex(null);
+    setDragOverTaskIndex(null);
+
+    try {
+      await tasksApi.reorder(reordered.map((t) => t.id));
+    } catch (err) {
+      console.error("Failed to reorder tasks:", err);
+      setTasks(previousTasks);
+      await alert({
+        title: "Reorder Failed",
+        message: getErrorMessage(err),
+        type: "error",
+      });
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggedTaskIndex(null);
+    setDragOverTaskIndex(null);
+  };
+
+  const handleMoveTask = async (currentIndex: number, direction: "up" | "down", e: React.MouseEvent) => {
+    e.stopPropagation();
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= tasks.length) return;
+
+    const previousTasks = [...tasks];
+    const reordered = [...tasks];
+    const [movedItem] = reordered.splice(currentIndex, 1);
+    reordered.splice(targetIndex, 0, movedItem);
+
+    setTasks(reordered);
+
+    try {
+      await tasksApi.reorder(reordered.map((t) => t.id));
+    } catch (err) {
+      console.error("Failed to reorder tasks:", err);
+      setTasks(previousTasks);
+      await alert({
+        title: "Reorder Failed",
+        message: getErrorMessage(err),
+        type: "error",
+      });
+    }
   };
 
   const handleBulkDelete = async () => {
@@ -171,9 +258,25 @@ export default function TasksPage() {
         filters.assigned_to_id = assigneeFilter;
       }
 
-      const data = await tasksApi.list(filters);
+      const perfParams: any = {};
+      if (assigneeFilter === "ME" && user?.id) {
+        perfParams.user_id = user.id;
+      } else if (assigneeFilter && assigneeFilter !== "SUBORDINATES") {
+        perfParams.user_id = assigneeFilter;
+      }
+
+      const [data, perfData] = await Promise.all([
+        tasksApi.list(filters),
+        statsApi.getPerformance(perfParams).catch((err) => {
+          console.error("Failed to load task performance stats:", err);
+          return null;
+        }),
+      ]);
       setTasks(data.items);
       setTotal(data.total);
+      if (perfData) {
+        setPerformanceStats(perfData);
+      }
     } catch (err) {
       if (!silent) setError(getErrorMessage(err));
     } finally {
@@ -231,13 +334,15 @@ export default function TasksPage() {
               Create, view, and track tasks according to organizational hierarchy
             </p>
           </div>
-          <button
-            onClick={() => setIsCreateOpen(true)}
-            className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 self-start sm:self-auto transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Create Task</span>
-          </button>
+          {hasPermission("tasks", "add") && (
+            <button
+              onClick={() => setIsCreateOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 self-start sm:self-auto transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create Task</span>
+            </button>
+          )}
         </div>
 
         {/* Filter Controls Bar */}
@@ -488,7 +593,7 @@ export default function TasksPage() {
 
         {/* Bulk Selection Action Bar */}
         {isSomeSelected && (
-          <div className="bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-850 rounded-2xl p-3 px-4 shadow-xs flex items-center justify-between gap-3 animate-in fade-in duration-150">
+          <div className="bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 rounded-2xl p-3 px-4 shadow-xs flex items-center justify-between gap-3 animate-in fade-in duration-150">
             <div className="flex items-center gap-2.5">
               <span className="inline-flex items-center justify-center min-w-5 px-1.5 h-5 rounded-full bg-indigo-600 text-white text-[11px] font-bold">
                 {selectedTaskIds.length}
@@ -505,25 +610,176 @@ export default function TasksPage() {
               >
                 Deselect All
               </button>
-              <button
-                type="button"
-                disabled={bulkDeleting}
-                onClick={handleBulkDelete}
-                className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-semibold text-xs shadow-xs flex items-center gap-1.5 transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>{bulkDeleting ? "Deleting..." : `Delete Selected (${selectedTaskIds.length})`}</span>
-              </button>
+              {hasPermission("tasks", "delete") && (
+                <button
+                  type="button"
+                  disabled={bulkDeleting}
+                  onClick={handleBulkDelete}
+                  className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-semibold text-xs shadow-xs flex items-center gap-1.5 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{bulkDeleting ? "Deleting..." : `Delete Selected (${selectedTaskIds.length})`}</span>
+                </button>
+              )}
             </div>
+          </div>
+        )}
+
+        {/* Task & Subtask Performance Summary Bar */}
+        {performanceStats && (
+          <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 dark:from-slate-950 dark:via-indigo-950/70 dark:to-slate-950 text-white rounded-2xl p-4 shadow-md border border-indigo-900/40 dark:border-slate-800 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-300 flex items-center justify-center shrink-0">
+                  <TrendingUp className="w-4 h-4 text-indigo-300" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                    <span>Performance Statistics (Tasks & Subtasks)</span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/10 text-indigo-200">
+                      {assigneeFilter === "ME"
+                        ? "My Personal Performance"
+                        : assigneeFilter && assigneeFilter !== "SUBORDINATES"
+                        ? "Filtered Assignee"
+                        : "Current Scope"}
+                    </span>
+                  </h4>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-indigo-200">
+                  Overall Score:{" "}
+                  <strong className="text-white text-sm font-black">
+                    {performanceStats.overall_performance_score}%
+                  </strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowPerfSummary(!showPerfSummary)}
+                  className="text-xs text-indigo-300 hover:text-white transition px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 cursor-pointer"
+                >
+                  {showPerfSummary ? "Collapse" : "Expand"}
+                </button>
+              </div>
+            </div>
+
+            {showPerfSummary && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1 border-t border-white/10 text-xs">
+                {/* Task Milestone Completion */}
+                <div className="bg-white/5 rounded-xl p-2.5 border border-white/5">
+                  <div className="flex items-center justify-between text-indigo-200 text-[11px] mb-1">
+                    <span className="flex items-center gap-1 font-semibold">
+                      <CheckSquare className="w-3.5 h-3.5 text-blue-400" />
+                      Tasks Done
+                    </span>
+                    <span className="font-bold text-white">
+                      {performanceStats.task_metrics.task_completion_rate}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden mb-1.5">
+                    <div
+                      className="bg-blue-400 h-full rounded-full transition-all"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(0, performanceStats.task_metrics.task_completion_rate)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-indigo-300/80">
+                    {performanceStats.task_metrics.completed_tasks} of{" "}
+                    {performanceStats.task_metrics.total_tasks} completed
+                  </span>
+                </div>
+
+                {/* Subtask Checklist Completion */}
+                <div className="bg-white/5 rounded-xl p-2.5 border border-white/5">
+                  <div className="flex items-center justify-between text-indigo-200 text-[11px] mb-1">
+                    <span className="flex items-center gap-1 font-semibold">
+                      <ListTodo className="w-3.5 h-3.5 text-emerald-400" />
+                      Subtasks Done
+                    </span>
+                    <span className="font-bold text-emerald-300">
+                      {performanceStats.subtask_metrics.subtask_completion_rate}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden mb-1.5">
+                    <div
+                      className="bg-emerald-400 h-full rounded-full transition-all"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(0, performanceStats.subtask_metrics.subtask_completion_rate)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-indigo-300/80">
+                    {performanceStats.subtask_metrics.completed_subtasks} of{" "}
+                    {performanceStats.subtask_metrics.total_subtasks} checked
+                  </span>
+                </div>
+
+                {/* Checklist Ratio & Velocity */}
+                <div className="bg-white/5 rounded-xl p-2.5 border border-white/5 flex flex-col justify-between">
+                  <div className="text-indigo-200 text-[11px] font-semibold flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Checklist Density</span>
+                  </div>
+                  <div className="text-sm font-bold text-white mt-1">
+                    {performanceStats.subtask_metrics.avg_subtasks_per_task}{" "}
+                    <span className="text-[10px] font-normal text-indigo-300">subtasks/task</span>
+                  </div>
+                  <span className="text-[10px] text-indigo-300/80">
+                    {performanceStats.subtask_metrics.pending_subtasks} subtasks pending
+                  </span>
+                </div>
+
+                {/* Overdue / Quality Alert */}
+                <div className="bg-white/5 rounded-xl p-2.5 border border-white/5 flex flex-col justify-between">
+                  <div className="text-indigo-200 text-[11px] font-semibold flex items-center gap-1">
+                    <AlertCircle
+                      className={`w-3.5 h-3.5 ${
+                        performanceStats.task_metrics.overdue_tasks > 0
+                          ? "text-rose-400"
+                          : "text-emerald-400"
+                      }`}
+                    />
+                    <span>On-Time & Health</span>
+                  </div>
+                  <div className="text-sm font-bold text-white mt-1">
+                    {performanceStats.task_metrics.on_time_rate}%{" "}
+                    <span className="text-[10px] font-normal text-indigo-300">on-time</span>
+                  </div>
+                  <span
+                    className={`text-[10px] font-semibold ${
+                      performanceStats.task_metrics.overdue_tasks > 0
+                        ? "text-rose-300"
+                        : "text-emerald-300"
+                    }`}
+                  >
+                    {performanceStats.task_metrics.overdue_tasks > 0
+                      ? `${performanceStats.task_metrics.overdue_tasks} tasks overdue`
+                      : "0 overdue tasks"}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Tasks Table */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xs overflow-hidden">
           <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase">
-              Showing {tasks.length} of {total} Tasks
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-500 uppercase">
+                Showing {tasks.length} of {total} Tasks
+              </span>
+              <span className="text-[11px] text-slate-400 font-normal hidden sm:inline">
+                • Drag ⠿ handle to rearrange
+              </span>
+            </div>
             {deletableTasks.length > 0 && (
               <span className="text-[11px] text-slate-400">
                 {selectedTaskIds.length} of {deletableTasks.length} deletable selected
@@ -535,6 +791,9 @@ export default function TasksPage() {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-slate-800">
                 <tr>
+                  <th className="w-8 px-2 py-3.5 text-center" title="Drag to reorder">
+                    <span className="sr-only">Order</span>
+                  </th>
                   <th className="w-10 px-4 py-3.5 text-center">
                     <input
                       type="checkbox"
@@ -564,25 +823,76 @@ export default function TasksPage() {
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="px-5 py-12 text-center text-slate-400">
+                    <td colSpan={11} className="px-5 py-12 text-center text-slate-400">
                       Loading tasks...
                     </td>
                   </tr>
                 ) : tasks.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-5 py-12 text-center text-slate-400">
+                    <td colSpan={11} className="px-5 py-12 text-center text-slate-400">
                       No tasks found matching criteria.
                     </td>
                   </tr>
                 ) : (
-                  tasks.map((t) => (
+                  tasks.map((t, index) => (
                     <tr
                       key={t.id}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, index)}
+                      onDragOver={(e) => handleDragOver(e, index)}
+                      onDrop={(e) => handleDrop(e, index)}
+                      onDragEnd={handleDragEnd}
                       onClick={() => setSelectedTaskId(t.id)}
-                      className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors ${
+                      className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-all ${
                         selectedTaskIds.includes(t.id) ? "bg-indigo-50/40 dark:bg-indigo-950/20" : ""
+                      } ${
+                        draggedTaskIndex === index ? "opacity-35 bg-indigo-50/80 dark:bg-indigo-950/40" : ""
+                      } ${
+                        dragOverTaskIndex === index && draggedTaskIndex !== index
+                          ? "border-t-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50/20 dark:bg-indigo-950/10"
+                          : ""
                       }`}
                     >
+                      <td
+                        className="w-8 px-1 py-2 text-center text-slate-300 dark:text-slate-600 select-none"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex flex-col items-center gap-0.5">
+                          <div
+                            draggable
+                            onDragStart={(e) => {
+                              e.stopPropagation();
+                              handleDragStart(e, index);
+                            }}
+                            className="cursor-grab active:cursor-grabbing hover:text-indigo-600 dark:hover:text-indigo-400 p-0.5"
+                            title="Drag ⠿ to rearrange"
+                          >
+                            <GripVertical className="w-3.5 h-3.5 mx-auto" />
+                          </div>
+                          {tasks.length > 1 && (
+                            <div className="flex flex-col -space-y-1">
+                              <button
+                                type="button"
+                                disabled={index === 0}
+                                onClick={(e) => handleMoveTask(index, "up", e)}
+                                title="Move up"
+                                className="text-slate-300 hover:text-indigo-600 dark:text-slate-600 dark:hover:text-indigo-400 disabled:opacity-20 p-0.5 transition"
+                              >
+                                <ChevronUp className="w-2.5 h-2.5" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={index === tasks.length - 1}
+                                onClick={(e) => handleMoveTask(index, "down", e)}
+                                title="Move down"
+                                className="text-slate-300 hover:text-indigo-600 dark:text-slate-600 dark:hover:text-indigo-400 disabled:opacity-20 p-0.5 transition"
+                              >
+                                <ChevronDown className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </td>
                       <td className="w-10 px-4 py-3.5 text-center" onClick={(e) => e.stopPropagation()}>
                         {canEditOrDeleteTask(t) ? (
                           <input
@@ -611,6 +921,17 @@ export default function TasksPage() {
                               <span>
                                 {t.completed_subtasks_count || 0}/{t.subtasks_count}
                               </span>
+                            </span>
+                          )}
+                          {(t.attachments_count ?? 0) > 0 && (
+                            <span
+                              title={`${t.attachments_count} file attachment${
+                                (t.attachments_count ?? 0) > 1 ? "s" : ""
+                              }`}
+                              className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-semibold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 shrink-0"
+                            >
+                              <Paperclip className="w-2.5 h-2.5" />
+                              <span>{t.attachments_count}</span>
                             </span>
                           )}
                           {t.is_recurring && (
@@ -665,25 +986,29 @@ export default function TasksPage() {
                       <td className="px-5 py-3.5 text-right space-x-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         {canEditOrDeleteTask(t) && (
                           <>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditTask(t);
-                                setIsEditOpen(true);
-                              }}
-                              title="Edit task"
-                              className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors inline-flex items-center gap-1"
-                            >
-                              <Edit className="w-3.5 h-3.5" />
-                              <span>Edit</span>
-                            </button>
-                            <button
-                              onClick={(e) => handleDeleteTask(t, e)}
-                              title="Delete task"
-                              className="px-2 py-1 text-xs font-semibold rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors inline-flex items-center gap-1"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {hasPermission("tasks", "edit") && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditTask(t);
+                                  setIsEditOpen(true);
+                                }}
+                                title="Edit task"
+                                className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors inline-flex items-center gap-1"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                                <span>Edit</span>
+                              </button>
+                            )}
+                            {hasPermission("tasks", "delete") && (
+                              <button
+                                onClick={(e) => handleDeleteTask(t, e)}
+                                title="Delete task"
+                                className="px-2 py-1 text-xs font-semibold rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors inline-flex items-center gap-1"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </>
                         )}
                       </td>

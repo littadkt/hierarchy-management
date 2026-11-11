@@ -1,20 +1,27 @@
 "use client";
 
-import React, { useState } from "react";
-import { X, PackagePlus, AlertCircle, Sparkles } from "lucide-react";
-import { inventoryApi, getErrorMessage } from "@/lib/api";
+import React, { useEffect, useState } from "react";
+import { X, PackagePlus, AlertCircle, Sparkles, Building } from "lucide-react";
+import { inventoryApi, branchesApi, getErrorMessage } from "@/lib/api";
+import { Branch } from "@/lib/types";
 
 interface CreateInventoryModalProps {
   isOpen: boolean;
   onClose: () => void;
   onItemCreated: () => void;
+  initialBranchId?: string;
+  branches?: Branch[];
 }
 
 export const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({
   isOpen,
   onClose,
   onItemCreated,
+  initialBranchId,
+  branches: propBranches,
 }) => {
+  const [branchId, setBranchId] = useState(initialBranchId || "");
+  const [availableBranches, setAvailableBranches] = useState<Branch[]>(propBranches || []);
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [rate, setRate] = useState<number | "">("");
@@ -25,6 +32,25 @@ export const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialBranchId) {
+      setBranchId(initialBranchId);
+    }
+  }, [initialBranchId, isOpen]);
+
+  useEffect(() => {
+    if (propBranches && propBranches.length > 0) {
+      setAvailableBranches(propBranches);
+    } else if (isOpen) {
+      branchesApi.list(true).then((bList) => {
+        setAvailableBranches(bList);
+        if (!branchId && bList.length > 0) {
+          setBranchId(initialBranchId || bList[0].id);
+        }
+      }).catch(() => {});
+    }
+  }, [propBranches, isOpen]);
 
   if (!isOpen) return null;
 
@@ -39,6 +65,7 @@ export const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({
     setError(null);
     try {
       await inventoryApi.create({
+        branch_id: branchId || undefined,
         code: code.trim() || undefined,
         name: name.trim(),
         rate: rate === "" ? 0 : Number(rate),
@@ -101,6 +128,28 @@ export const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            {/* Branch Selection */}
+            {availableBranches.length > 0 && (
+              <div className="sm:col-span-2 space-y-1">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                  <Building className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Branch Assignment</span>
+                </label>
+                <select
+                  value={branchId}
+                  onChange={(e) => setBranchId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200 font-medium focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                >
+                  <option value="">Default Branch (Auto)</option>
+                  {availableBranches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} {b.city ? `(${b.city})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="sm:col-span-2 space-y-1">
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
                 Barcode / Code <span className="text-slate-400 font-normal">(Optional - auto-generated if blank)</span>

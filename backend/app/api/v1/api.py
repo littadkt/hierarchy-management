@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     approvals,
+    attendance,
     auth,
     backup,
     branches,
@@ -15,11 +16,14 @@ from app.api.v1.endpoints import (
     users,
     wholesale,
     realtime,
+    warranty,
+    permissions,
 )
 
 api_router = APIRouter()
 
 api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+api_router.include_router(permissions.router, prefix="/permissions", tags=["Accessible Windows & Permissions"])
 api_router.include_router(users.router, prefix="/users", tags=["Users & Hierarchy"])
 api_router.include_router(branches.router, prefix="/branches", tags=["Branch Management"])
 api_router.include_router(departments.router, prefix="/departments", tags=["Department Management"])
@@ -38,7 +42,13 @@ api_router.include_router(
     checklist.router, prefix="/checklist", tags=["Checklist & Quick Tasks"]
 )
 api_router.include_router(
+    attendance.router, prefix="/attendance", tags=["Attendance & Check-in"]
+)
+api_router.include_router(
     backup.router, prefix="/backup", tags=["Database Backup & Restore"]
+)
+api_router.include_router(
+    warranty.router, prefix="/warranty", tags=["Warranty Jobs & Service"]
 )
 api_router.include_router(
     realtime.router, prefix="/realtime", tags=["Realtime Synchronization"]

@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     BACKUP_SCHEDULE_MINUTE: int = 0
     POSTGRES_BIN_PATH: Optional[str] = None
 
+    # File Attachments Configuration
+    UPLOAD_DIR: str = "uploads"
+    ATTACHMENTS_DIR: str = "uploads/attachments"
+
+    @property
+    def ABSOLUTE_ATTACHMENTS_DIR(self) -> Path:
+        from pathlib import Path
+        p = Path(self.ATTACHMENTS_DIR)
+        if not p.is_absolute():
+            backend_root = Path(__file__).resolve().parent.parent.parent
+            p = backend_root / p
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
     @property
     def ABSOLUTE_BACKUP_DIR(self) -> Path:
         from pathlib import Path

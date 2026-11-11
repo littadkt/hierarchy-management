@@ -20,8 +20,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useConfirm } from "@/context/ConfirmContext";
-import { inventoryApi, getErrorMessage } from "@/lib/api";
-import { InventoryItem } from "@/lib/types";
+import { inventoryApi, branchesApi, getErrorMessage } from "@/lib/api";
+import { Branch, InventoryItem } from "@/lib/types";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { CreateInventoryModal } from "@/components/CreateInventoryModal";
 import { EditInventoryModal } from "@/components/EditInventoryModal";
@@ -29,7 +29,7 @@ import { ScanPurchaseRequestModal } from "@/components/ScanPurchaseRequestModal"
 import { ExcelUploadModal } from "@/components/ExcelUploadModal";
 
 export default function InventoryPage() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const { confirm, alert } = useConfirm();
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [total, setTotal] = useState<number>(0);
@@ -38,6 +38,8 @@ export default function InventoryPage() {
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [selectedBranchId, setSelectedBranchId] = useState<string>("");
 
   // Modals
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -151,6 +153,7 @@ export default function InventoryPage() {
       const data = await inventoryApi.list({
         search: search.trim() || undefined,
         category: categoryFilter.trim() || undefined,
+        branch_id: selectedBranchId || undefined,
       });
       setItems(data.items);
       setTotal(data.total);
@@ -161,11 +164,32 @@ export default function InventoryPage() {
     }
   };
 
+  // Load active branches
+  useEffect(() => {
+    branchesApi
+      .list(true)
+      .then((bList) => {
+        setBranches(bList);
+        // If user has an assigned branch and is not Super Admin, default to their branch
+        if (user && user.role !== "SUPER_ADMIN" && user.branch) {
+          const userBranch = bList.find(
+            (b) => b.name.toLowerCase().trim() === user.branch?.toLowerCase().trim()
+          );
+          if (userBranch) {
+            setSelectedBranchId(userBranch.id);
+          }
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load branches:", err);
+      });
+  }, [user]);
+
   useEffect(() => {
     if (user) {
       loadInventory();
     }
-  }, [user, categoryFilter]);
+  }, [user, categoryFilter, selectedBranchId]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -228,7 +252,7 @@ export default function InventoryPage() {
                 <span>Delete Selected ({selectedItemIds.length})</span>
               </button>
             )}
-            {canManageInventory && (
+            {canManageInventory && hasPermission("inventory", "add") && (
               <button
                 onClick={() => setIsExcelUploadOpen(true)}
                 className="px-4 py-2.5 rounded-xl border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 font-semibold text-xs flex items-center gap-2 transition-colors shadow-xs"
@@ -237,13 +261,15 @@ export default function InventoryPage() {
                 <span>Import Excel</span>
               </button>
             )}
-            <button
-              onClick={() => setIsCreateOpen(true)}
-              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Inventory Item</span>
-            </button>
+            {hasPermission("inventory", "add") && (
+              <button
+                onClick={() => setIsCreateOpen(true)}
+                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 transition-all"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Inventory Item</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -254,43 +280,122 @@ export default function InventoryPage() {
           </div>
         )}
 
+        {/* Branch Inventory Scope Switcher */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Building className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-100">
+                Branch Inventory
+              </span>
+              {selectedBranchId ? (
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  {branches.find((b) => b.id === selectedBranchId)?.name || "Selected Branch"}
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                  All Branches Combined
+                </span>
+              )}
+            </div>
+
+            {user?.branch && (
+              <span className="text-[11px] text-slate-500">
+                Your Assigned Location: <strong className="text-slate-700 dark:text-slate-300">{user.branch}</strong>
+              </span>
+            )}
+          </div>
+
+          {/* Branch Navigation Pills */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {(user?.role === "SUPER_ADMIN" || user?.role === "ADMIN") && (
+              <button
+                type="button"
+                onClick={() => setSelectedBranchId("")}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                  selectedBranchId === ""
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-300"
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>All Branches</span>
+              </button>
+            )}
+
+            {branches.map((b) => {
+              const isSelected = selectedBranchId === b.id;
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => setSelectedBranchId(b.id)}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                    isSelected
+                      ? "bg-indigo-600 text-white shadow-xs"
+                      : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-300"
+                  }`}
+                >
+                  <Building className="w-3.5 h-3.5" />
+                  <span>{b.name}</span>
+                  {b.city && <span className="opacity-75 font-normal text-[10px]">({b.city})</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Inventory Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
-              <Package className="w-6 h-6" />
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+              <Package className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
                 Total Products
               </p>
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white">{total}</h3>
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">{total}</h3>
             </div>
           </div>
 
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-              <Boxes className="w-6 h-6" />
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+              <Boxes className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Total Units In Stock
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                Units In Stock
               </p>
-              <h3 className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+              <h3 className="text-xl font-bold text-emerald-600 dark:text-emerald-400">
                 {items.reduce((acc, curr) => acc + curr.quantity, 0)}
               </h3>
             </div>
           </div>
 
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
-              <Tag className="w-6 h-6" />
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
+              <Building className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Product Categories
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                Active Branches
               </p>
-              <h3 className="text-2xl font-bold text-purple-600 dark:text-purple-400">
+              <h3 className="text-xl font-bold text-sky-600 dark:text-sky-400">
+                {branches.length}
+              </h3>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
+              <Tag className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                Categories
+              </p>
+              <h3 className="text-xl font-bold text-purple-600 dark:text-purple-400">
                 {categories.length}
               </h3>
             </div>
@@ -382,6 +487,7 @@ export default function InventoryPage() {
                   )}
                   <th className="px-5 py-3.5">Barcode / Code</th>
                   <th className="px-5 py-3.5">Product Name</th>
+                  <th className="px-5 py-3.5">Branch</th>
                   <th className="px-5 py-3.5">Category</th>
                   <th className="px-5 py-3.5">Brand</th>
                   <th className="px-5 py-3.5">Vendor</th>
@@ -393,13 +499,13 @@ export default function InventoryPage() {
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {loading ? (
                   <tr>
-                    <td colSpan={canManageInventory ? 9 : 8} className="px-5 py-12 text-center text-slate-400">
+                    <td colSpan={canManageInventory ? 10 : 9} className="px-5 py-12 text-center text-slate-400">
                       Loading inventory items...
                     </td>
                   </tr>
                 ) : items.length === 0 ? (
                   <tr>
-                    <td colSpan={canManageInventory ? 9 : 8} className="px-5 py-12 text-center text-slate-400">
+                    <td colSpan={canManageInventory ? 10 : 9} className="px-5 py-12 text-center text-slate-400">
                       No inventory items found. Click "Add Inventory Item" to register products.
                     </td>
                   </tr>
@@ -428,6 +534,16 @@ export default function InventoryPage() {
                       </td>
                       <td className="px-5 py-3.5 font-bold text-slate-900 dark:text-white">
                         {item.name || "—"}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        {item.branch_name ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            <Building className="w-2.5 h-2.5 text-indigo-500" />
+                            <span>{item.branch_name}</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-xs italic">All Branches</span>
+                        )}
                       </td>
                       <td className="px-5 py-3.5">
                         {item.category ? (
@@ -461,37 +577,43 @@ export default function InventoryPage() {
                       <td className="px-5 py-3.5 text-right space-x-1.5 whitespace-nowrap">
                         {canManageInventory && (
                           <>
-                            <button
-                              onClick={() => {
-                                setSelectedEditItem(item);
-                                setIsQuickQtyOnly(true);
-                                setIsEditOpen(true);
-                              }}
-                              title="Quick stock edit"
-                              className="px-2 py-1 text-xs font-semibold rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 dark:hover:bg-amber-900 transition-colors inline-flex items-center gap-1"
-                            >
-                              <Sliders className="w-3.5 h-3.5" />
-                              <span>Qty</span>
-                            </button>
-                            <button
-                              onClick={() => {
-                                setSelectedEditItem(item);
-                                setIsQuickQtyOnly(false);
-                                setIsEditOpen(true);
-                              }}
-                              title="Edit item details"
-                              className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors inline-flex items-center gap-1"
-                            >
-                              <Edit className="w-3.5 h-3.5" />
-                              <span>Edit</span>
-                            </button>
-                            <button
-                              onClick={() => handleDeleteItem(item)}
-                              title="Delete item"
-                              className="px-2 py-1 text-xs font-semibold rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors inline-flex items-center gap-1"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {hasPermission("inventory", "edit") && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setSelectedEditItem(item);
+                                    setIsQuickQtyOnly(true);
+                                    setIsEditOpen(true);
+                                  }}
+                                  title="Quick stock edit"
+                                  className="px-2 py-1 text-xs font-semibold rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 dark:hover:bg-amber-900 transition-colors inline-flex items-center gap-1"
+                                >
+                                  <Sliders className="w-3.5 h-3.5" />
+                                  <span>Qty</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSelectedEditItem(item);
+                                    setIsQuickQtyOnly(false);
+                                    setIsEditOpen(true);
+                                  }}
+                                  title="Edit item details"
+                                  className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors inline-flex items-center gap-1"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                  <span>Edit</span>
+                                </button>
+                              </>
+                            )}
+                            {hasPermission("inventory", "delete") && (
+                              <button
+                                onClick={() => handleDeleteItem(item)}
+                                title="Delete item"
+                                className="px-2 py-1 text-xs font-semibold rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors inline-flex items-center gap-1"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </>
                         )}
                         <button
@@ -517,12 +639,15 @@ export default function InventoryPage() {
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
         onItemCreated={() => loadInventory()}
+        initialBranchId={selectedBranchId}
+        branches={branches}
       />
 
       <EditInventoryModal
         item={selectedEditItem}
         isOpen={isEditOpen}
         quickQuantityOnly={isQuickQtyOnly}
+        branches={branches}
         onClose={() => {
           setIsEditOpen(false);
           setSelectedEditItem(null);
@@ -555,10 +680,11 @@ export default function InventoryPage() {
           "Brand",
           "Vendor",
           "Quantity",
+          "Branch",
         ]}
         onDownloadTemplate={inventoryApi.downloadTemplate}
         templateFilename="inventory_import_template.xlsx"
-        onUpload={inventoryApi.uploadExcel}
+        onUpload={(file) => inventoryApi.uploadExcel(file, selectedBranchId || undefined)}
         onSuccess={() => loadInventory()}
       />
     </ProtectedRoute>

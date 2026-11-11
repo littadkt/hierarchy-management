@@ -1,12 +1,14 @@
 from typing import Any, List, Optional
 import uuid
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.excel_utils import create_excel_template, parse_excel_or_csv_bytes
 from app.db.session import get_db
+from app.models.branch import Branch
 from app.models.user import Role, User
 from app.schemas.inventory import (
     BulkDeleteInventoryRequest,
@@ -32,6 +34,7 @@ class InventoryListResponse(BaseModel):
 @router.get("/by-code/{code}", response_model=InventoryItemOut)
 async def get_inventory_by_code(
     code: str,
+    branch_id: Optional[uuid.UUID] = Query(None),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -39,7 +42,18 @@ async def get_inventory_by_code(
     Scan/lookup inventory item by barcode.
     Returns 404 if item is not present in inventory database.
     """
-    item = await InventoryService.get_by_code(session, code)
+    target_branch_id = branch_id
+    if target_branch_id is None and current_user.branch:
+        b_res = await session.execute(
+            select(Branch.id).where(Branch.name.ilike(current_user.branch.strip()))
+        )
+        target_branch_id = b_res.scalar_one_or_none()
+
+    item = await InventoryService.get_by_code(session, code, branch_id=target_branch_id)
+    if not item:
+        # Fallback to any branch if not found in target branch
+        item = await InventoryService.get_by_code(session, code)
+
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -53,16 +67,25 @@ async def get_inventory_by_code(
 async def list_inventory(
     search: Optional[str] = None,
     category: Optional[str] = None,
+    branch_id: Optional[uuid.UUID] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
-    """List inventory items with search & category filtering"""
+    """List inventory items with search & category filtering, optionally filtered by branch"""
+    target_branch_id = branch_id
+    if target_branch_id is None and current_user.role not in [Role.SUPER_ADMIN, Role.ADMIN] and current_user.branch:
+        b_res = await session.execute(
+            select(Branch.id).where(Branch.name.ilike(current_user.branch.strip()))
+        )
+        target_branch_id = b_res.scalar_one_or_none()
+
     items, total = await InventoryService.list_items(
         session=session,
         search=search,
         category=category,
+        branch_id=target_branch_id,
         skip=skip,
         limit=limit,
     )
@@ -79,11 +102,12 @@ async def download_inventory_template(
     current_user: User = Depends(get_current_user),
 ) -> Response:
     """Download standard Excel template for bulk importing inventory items"""
-    headers = ["Barcode", "Product Name", "Rate", "Category", "Brand", "Vendor", "Quantity"]
+    headers = ["Barcode", "Product Name", "Rate", "Category", "Brand", "Vendor", "Quantity", "Branch"]
     samples = [
-        ["BAR-1001", "Wireless Optical Mouse", 450.00, "Electronics", "Logitech", "Tech Supplies Co", 50],
-        ["BAR-1002", "Mechanical Keyboard RGB", 1850.00, "Electronics", "Redragon", "Tech Supplies Co", 25],
-        ["BAR-1003", "A4 Copy Paper 500 Sheets", 280.00, "Stationery", "JK Paper", "Office World", 100],
+        ["BAR-1001", "Wireless Optical Mouse", 450.00, "Electronics", "Logitech", "Tech Supplies Co", 50, "Kochi Branch"],
+        ["BAR-1001", "Wireless Optical Mouse", 450.00, "Electronics", "Logitech", "Tech Supplies Co", 30, "Calicut Branch"],
+        ["BAR-1002", "Mechanical Keyboard RGB", 1850.00, "Electronics", "Redragon", "Tech Supplies Co", 25, "Kochi Branch"],
+        ["BAR-1003", "A4 Copy Paper 500 Sheets", 280.00, "Stationery", "JK Paper", "Office World", 100, "Trivandrum Branch"],
     ]
     file_bytes = create_excel_template("Inventory Import", headers, samples)
     return Response(
@@ -96,6 +120,7 @@ async def download_inventory_template(
 @router.post("/upload-excel", response_model=BulkUploadResult)
 async def upload_inventory_excel(
     file: UploadFile = File(...),
+    branch_id: Optional[uuid.UUID] = Form(None),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -118,7 +143,7 @@ async def upload_inventory_excel(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No valid data rows found in the uploaded file.",
         )
-    return await InventoryService.bulk_import_from_excel(session, rows)
+    return await InventoryService.bulk_import_from_excel(session, rows, default_branch_id=branch_id)
 
 
 @router.get("/{item_id}", response_model=InventoryItemOut)
@@ -144,6 +169,18 @@ async def create_inventory_item(
     session: AsyncSession = Depends(get_db),
 ) -> Any:
     """Add a new product to inventory database"""
+    if current_user.role not in [Role.SUPER_ADMIN, Role.ADMIN]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Super Admins and Admins can create inventory items.",
+        )
+    if not item_in.branch_id and current_user.branch:
+        b_res = await session.execute(
+            select(Branch.id).where(Branch.name.ilike(current_user.branch.strip()))
+        )
+        user_branch_id = b_res.scalar_one_or_none()
+        if user_branch_id:
+            item_in.branch_id = user_branch_id
     return await InventoryService.create_item(session, item_in)
 
 
@@ -207,5 +244,6 @@ async def delete_inventory_item(
             detail="Only Super Admins and Admins can delete inventory items.",
         )
     await InventoryService.delete_item(session, item_id)
+
 
 

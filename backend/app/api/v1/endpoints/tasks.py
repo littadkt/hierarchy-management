@@ -1,6 +1,7 @@
 from typing import Any, List, Optional
 import uuid
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,8 +10,10 @@ from app.db.session import get_db
 from app.models.task import TaskPriority, TaskStatus
 from app.models.user import User
 from app.schemas.activity import ActivityOut, CommentCreate, CommentOut
-from app.schemas.subtask import SubtaskCreate, SubtaskOut, SubtaskToggle, SubtaskUpdate
-from app.schemas.task import BulkDeleteTasks, TaskCreate, TaskDetailOut, TaskOut, TaskStatusUpdate, TaskUpdate
+from app.schemas.attachment import AttachmentOut
+from app.schemas.subtask import SubtaskCreate, SubtaskOut, SubtaskReorderRequest, SubtaskToggle, SubtaskUpdate
+from app.schemas.task import BulkDeleteTasks, TaskCreate, TaskDetailOut, TaskOut, TaskReorderRequest, TaskStatusUpdate, TaskUpdate
+from app.services.attachment_service import AttachmentService
 from app.services.subtask_service import SubtaskService
 from app.services.task_service import TaskService
 
@@ -83,6 +86,29 @@ async def list_tasks(
         "skip": skip,
         "limit": limit,
     }
+
+
+@router.patch("/reorder", status_code=status.HTTP_200_OK)
+async def reorder_tasks(
+    payload: TaskReorderRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """Rearrange the display order of tasks"""
+    await TaskService.reorder_tasks(session, current_user, payload.task_ids)
+    return {"message": "Tasks reordered successfully"}
+
+
+@router.get("/subordinates/today-status")
+async def get_subordinate_today_status(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Check if the current user is eligible to complete or submit tasks based on
+    subordinate task completion prerequisites for today.
+    """
+    return await TaskService.get_subordinate_today_task_status(session, current_user)
 
 
 @router.get("/{task_id}", response_model=TaskDetailOut)
@@ -219,6 +245,18 @@ async def create_subtask(
     return await SubtaskService.create_subtask(session, current_user, task_id, subtask_in)
 
 
+@router.patch("/{task_id}/subtasks/reorder", status_code=status.HTTP_200_OK)
+async def reorder_subtasks(
+    task_id: uuid.UUID,
+    payload: SubtaskReorderRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """Rearrange the display order of subtasks under a task"""
+    await SubtaskService.reorder_subtasks(session, current_user, task_id, payload.subtask_ids)
+    return {"message": "Subtasks reordered successfully"}
+
+
 @router.put("/{task_id}/subtasks/{subtask_id}", response_model=SubtaskOut)
 async def update_subtask(
     task_id: uuid.UUID,
@@ -258,5 +296,115 @@ async def delete_subtask(
 ) -> None:
     """Delete a subtask under a task"""
     await SubtaskService.delete_subtask(session, current_user, task_id, subtask_id)
+
+
+# --- Attachment Endpoints ---
+@router.post(
+    "/{task_id}/attachments",
+    response_model=List[AttachmentOut],
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_task_attachments(
+    task_id: uuid.UUID,
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """Upload one or more file attachments to a task"""
+    return await AttachmentService.upload_attachments_batch(
+        session=session,
+        current_user=current_user,
+        task_id=task_id,
+        files=files,
+    )
+
+
+@router.get("/{task_id}/attachments", response_model=List[AttachmentOut])
+async def list_task_attachments(
+    task_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """List all attachments uploaded directly to a task"""
+    return await AttachmentService.list_attachments(
+        session=session,
+        current_user=current_user,
+        task_id=task_id,
+    )
+
+
+@router.post(
+    "/{task_id}/subtasks/{subtask_id}/attachments",
+    response_model=List[AttachmentOut],
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_subtask_attachments(
+    task_id: uuid.UUID,
+    subtask_id: uuid.UUID,
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """Upload one or more file attachments directly to a subtask"""
+    return await AttachmentService.upload_attachments_batch(
+        session=session,
+        current_user=current_user,
+        task_id=task_id,
+        files=files,
+        subtask_id=subtask_id,
+    )
+
+
+@router.get("/{task_id}/subtasks/{subtask_id}/attachments", response_model=List[AttachmentOut])
+async def list_subtask_attachments(
+    task_id: uuid.UUID,
+    subtask_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """List all attachments associated with a specific subtask"""
+    return await AttachmentService.list_attachments(
+        session=session,
+        current_user=current_user,
+        task_id=task_id,
+        subtask_id=subtask_id,
+    )
+
+
+@router.get("/attachments/{attachment_id}/download")
+async def download_attachment(
+    attachment_id: uuid.UUID,
+    download: bool = Query(False, description="True to force file download dialog, False to preview inline"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """Download or view an attachment file with security and hierarchy check"""
+    attachment, file_path = await AttachmentService.get_attachment_file(
+        session=session,
+        current_user=current_user,
+        attachment_id=attachment_id,
+    )
+    disposition = "attachment" if download else "inline"
+    return FileResponse(
+        path=file_path,
+        filename=attachment.filename,
+        media_type=attachment.content_type or "application/octet-stream",
+        content_disposition_type=disposition,
+    )
+
+
+@router.delete("/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_attachment(
+    attachment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete an attachment (allowed by Super Admin, task creator, or uploader)"""
+    await AttachmentService.delete_attachment(
+        session=session,
+        current_user=current_user,
+        attachment_id=attachment_id,
+    )
+
 
 

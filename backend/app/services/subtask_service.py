@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.subtask import Subtask
+from app.models.attachment import TaskAttachment
 from app.models.task import Task, TaskStatus
 from app.models.task_activity import ActivityAction, TaskActivity
 from app.models.user import Role, User
@@ -33,8 +34,9 @@ class SubtaskService:
             .options(
                 selectinload(Subtask.assigned_to),
                 selectinload(Subtask.created_by),
+                selectinload(Subtask.attachments).selectinload(TaskAttachment.uploaded_by),
             )
-            .order_by(Subtask.created_at.asc())
+            .order_by(Subtask.order_index.asc(), Subtask.created_at.asc())
         )
         res = await session.execute(stmt)
         return list(res.scalars().all())
@@ -51,6 +53,7 @@ class SubtaskService:
                 selectinload(Subtask.task),
                 selectinload(Subtask.assigned_to),
                 selectinload(Subtask.created_by),
+                selectinload(Subtask.attachments).selectinload(TaskAttachment.uploaded_by),
             )
         )
         res = await session.execute(stmt)
@@ -345,4 +348,31 @@ class SubtaskService:
         session.add(activity)
 
         await session.commit()
+
+    @staticmethod
+    async def reorder_subtasks(
+        session: AsyncSession,
+        current_user: User,
+        task_id: uuid.UUID,
+        subtask_ids: List[uuid.UUID],
+    ) -> None:
+        """Rearrange the display order of subtasks under a task"""
+        task = await TaskService.get_by_id(session, task_id, current_user=current_user)
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found",
+            )
+        if not subtask_ids:
+            return
+
+        for index, sub_id in enumerate(subtask_ids):
+            stmt = select(Subtask).where(Subtask.id == sub_id, Subtask.task_id == task_id)
+            res = await session.execute(stmt)
+            sub = res.scalar_one_or_none()
+            if sub:
+                sub.order_index = index
+
+        await session.commit()
+
 

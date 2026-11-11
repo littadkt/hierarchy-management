@@ -59,6 +59,9 @@ async def get_hierarchy_tree(
             "department": u.department,
             "reports_to_id": u.reports_to_id,
             "task_stats": u.task_stats.model_dump(),
+            "is_on_leave": u.is_on_leave,
+            "leave_date": u.leave_date,
+            "leave_reason": u.leave_reason,
             "subordinates": [],
         }
 

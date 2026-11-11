@@ -18,6 +18,7 @@ from app.core.security import (
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import UserOut
+from app.services.permission_service import PermissionService
 from app.services.user_service import UserService
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,8 @@ async def login_access_token(
 
     logger.info(f"User '{user.email}' logged in successfully from IP {client_ip}")
 
+    user.permissions = PermissionService.get_user_permissions(user)
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -202,6 +205,8 @@ async def login_json(
 
     logger.info(f"User '{user.email}' logged in successfully via JSON from IP {client_ip}")
 
+    user.permissions = PermissionService.get_user_permissions(user)
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -268,20 +273,7 @@ async def get_me(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Return currently logged-in user profile and ensure today's login is recorded"""
-    now = datetime.now(timezone.utc)
-    today_str = now.astimezone().strftime("%Y-%m-%d")
-
-    # If the user opens the app with an existing token today for the first time
-    if not current_user.today_first_login_date or current_user.today_first_login_date != today_str or current_user.today_first_login_at is None:
-        client_ip = _get_client_ip(request)
-        current_user = await UserService.record_login(
-            session,
-            current_user,
-            ip_address=client_ip,
-            user_agent=request.headers.get("User-Agent"),
-        )
-
+    """Return currently logged-in user profile"""
     return UserOut(
         id=current_user.id,
         email=current_user.email,
@@ -298,4 +290,8 @@ async def get_me(
         updated_at=current_user.updated_at,
         last_login_at=current_user.last_login_at,
         today_first_login_at=UserService.get_effective_today_first_login(current_user),
+        is_on_leave=current_user.is_on_leave,
+        leave_date=current_user.leave_date,
+        leave_reason=current_user.leave_reason,
+        permissions=PermissionService.get_user_permissions(current_user),
     )

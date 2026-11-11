@@ -1,11 +1,14 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.inventory import InventoryItem
 
 
 class Branch(Base):
@@ -29,4 +32,11 @@ class Branch(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+
+    # Relationships
+    inventory_items: Mapped[List["InventoryItem"]] = relationship(
+        "InventoryItem",
+        back_populates="branch",
+        cascade="all, delete-orphan",
     )

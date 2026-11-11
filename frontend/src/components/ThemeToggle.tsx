@@ -63,7 +63,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
           className={`relative inline-flex items-center justify-center p-2 rounded-lg transition-all duration-200 cursor-pointer ${
             isDark
               ? "text-amber-400 hover:bg-slate-700/80 hover:text-amber-300"
-              : "text-slate-600 hover:bg-slate-100 hover:text-indigo-600"
+              : "text-slate-600 hover:bg-slate-100 hover:text-primary"
           }`}
         >
           <div className="relative w-4 h-4 flex items-center justify-center">
@@ -129,7 +129,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
                     : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
                 }`}
               >
-                <Moon className="w-3.5 h-3.5 mb-0.5 text-indigo-400" />
+                <Moon className="w-3.5 h-3.5 mb-0.5 text-primary" />
                 <span className="text-[11px]">Dark</span>
               </button>
 
@@ -164,7 +164,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
                     title={color.label}
                     className={`relative w-7 h-7 rounded-full flex items-center justify-center transition-all cursor-pointer hover:scale-110 ${
                       isSelected
-                        ? "ring-2 ring-offset-2 ring-indigo-500 dark:ring-offset-slate-900 shadow-md scale-105"
+                        ? "ring-2 ring-offset-2 ring-primary dark:ring-offset-slate-900 shadow-md scale-105"
                         : "opacity-80 hover:opacity-100"
                     }`}
                     style={{ backgroundColor: color.colorHex }}

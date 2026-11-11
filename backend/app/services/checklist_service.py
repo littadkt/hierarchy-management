@@ -4,6 +4,7 @@ import uuid
 from fastapi import HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.checklist import ChecklistItem
 from app.models.user import User
@@ -22,8 +23,9 @@ class ChecklistService:
         """
         stmt = (
             select(ChecklistItem)
+            .options(selectinload(ChecklistItem.target_user))
             .where(ChecklistItem.user_id == current_user.id)
-            .order_by(ChecklistItem.is_completed.asc(), ChecklistItem.created_at.desc())
+            .order_by(ChecklistItem.is_completed.asc(), ChecklistItem.order_index.asc(), ChecklistItem.created_at.desc())
         )
         res = await session.execute(stmt)
         return list(res.scalars().all())
@@ -34,9 +36,13 @@ class ChecklistService:
         current_user: User,
         item_id: uuid.UUID,
     ) -> ChecklistItem:
-        stmt = select(ChecklistItem).where(
-            ChecklistItem.id == item_id,
-            ChecklistItem.user_id == current_user.id,
+        stmt = (
+            select(ChecklistItem)
+            .options(selectinload(ChecklistItem.target_user))
+            .where(
+                ChecklistItem.id == item_id,
+                ChecklistItem.user_id == current_user.id,
+            )
         )
         res = await session.execute(stmt)
         item = res.scalar_one_or_none()
@@ -60,11 +66,11 @@ class ChecklistService:
             description=item_in.description.strip() if item_in.description else None,
             due_date=item_in.due_date,
             is_completed=False,
+            target_user_id=item_in.target_user_id,
         )
         session.add(item)
         await session.commit()
-        await session.refresh(item)
-        return item
+        return await ChecklistService.get_item(session, current_user, item.id)
 
     @staticmethod
     async def update_item(
@@ -82,10 +88,11 @@ class ChecklistService:
             item.due_date = item_in.due_date
         if item_in.is_completed is not None:
             item.is_completed = item_in.is_completed
+        if "target_user_id" in item_in.model_fields_set:
+            item.target_user_id = item_in.target_user_id
 
         await session.commit()
-        await session.refresh(item)
-        return item
+        return await ChecklistService.get_item(session, current_user, item.id)
 
     @staticmethod
     async def toggle_item(
@@ -97,8 +104,7 @@ class ChecklistService:
         item = await ChecklistService.get_item(session, current_user, item_id)
         item.is_completed = is_completed
         await session.commit()
-        await session.refresh(item)
-        return item
+        return await ChecklistService.get_item(session, current_user, item.id)
 
     @staticmethod
     async def delete_item(
@@ -122,4 +128,25 @@ class ChecklistService:
         res = await session.execute(stmt)
         await session.commit()
         return res.rowcount or 0
+
+    @staticmethod
+    async def reorder_items(
+        session: AsyncSession,
+        current_user: User,
+        item_ids: List[uuid.UUID],
+    ) -> None:
+        """Rearrange the display order of checklist items for current user"""
+        if not item_ids:
+            return
+        for index, item_id in enumerate(item_ids):
+            stmt = select(ChecklistItem).where(
+                ChecklistItem.id == item_id,
+                ChecklistItem.user_id == current_user.id,
+            )
+            res = await session.execute(stmt)
+            item = res.scalar_one_or_none()
+            if item:
+                item.order_index = index
+        await session.commit()
+
 

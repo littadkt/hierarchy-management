@@ -1,6 +1,7 @@
 from typing import Any, List
 import uuid
 from fastapi import APIRouter, Depends, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -9,12 +10,32 @@ from app.models.user import User
 from app.schemas.checklist import (
     ChecklistCreate,
     ChecklistOut,
+    ChecklistReorderRequest,
     ChecklistToggle,
     ChecklistUpdate,
 )
+from app.schemas.user import UserBrief
 from app.services.checklist_service import ChecklistService
 
 router = APIRouter()
+
+
+@router.get("/users", response_model=List[UserBrief])
+async def get_checklist_selectable_users(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Get active users directory for optional user selection in checklist items.
+    Accessible to all users.
+    """
+    stmt = (
+        select(User)
+        .where(User.is_active == True)
+        .order_by(User.role, User.full_name)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().all()
 
 
 @router.get("", response_model=List[ChecklistOut])
@@ -49,6 +70,17 @@ async def clear_completed_checklist_items(
     """Remove all completed checklist items for current user"""
     count = await ChecklistService.clear_completed(session, current_user)
     return {"cleared_count": count}
+
+
+@router.patch("/reorder", status_code=status.HTTP_200_OK)
+async def reorder_checklist_items(
+    payload: ChecklistReorderRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """Rearrange order of checklist items"""
+    await ChecklistService.reorder_items(session, current_user, payload.item_ids)
+    return {"message": "Checklist items reordered successfully"}
 
 
 @router.put("/{item_id}", response_model=ChecklistOut)

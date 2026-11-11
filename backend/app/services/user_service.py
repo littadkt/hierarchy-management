@@ -8,14 +8,16 @@ from sqlalchemy.orm import selectinload
 
 from app.core.broadcaster import broadcaster
 from app.core.permissions import (
+    HierarchyPermissionError,
     validate_can_create_user,
     validate_can_delete_user,
     validate_can_edit_user,
 )
 from app.core.security import get_password_hash
+from app.models.attendance import Attendance, AttendanceStatus
 from app.models.task import Task, TaskStatus
 from app.models.user import Role, User, UserLoginRecord
-from app.schemas.user import UserCreate, UserTaskStats, UserUpdate, UserWithStats
+from app.schemas.user import UserCreate, UserLeaveUpdate, UserTaskStats, UserUpdate, UserWithStats
 
 
 class UserService:
@@ -64,17 +66,13 @@ class UserService:
         """
         Records a user login event:
         - Updates last_login_at to now.
-        - Sets today_first_login_at to now if this is the user's first login today.
         - Saves an audit record in user_login_records.
         - Broadcasts a realtime USER_LOGIN event.
+        - Note: Does NOT automatically check in the user. Check-in is manual via AttendanceService.
         """
         now = datetime.now(timezone.utc)
-        today_str = now.astimezone().strftime("%Y-%m-%d")
 
         user.last_login_at = now
-        if not user.today_first_login_date or user.today_first_login_date != today_str or user.today_first_login_at is None:
-            user.today_first_login_at = now
-            user.today_first_login_date = today_str
 
         # Add audit record
         login_log = UserLoginRecord(
@@ -206,8 +204,99 @@ class UserService:
         if user_in.department is not None:
             target.department = user_in.department.strip() if user_in.department and user_in.department.strip() else None
 
+        if user_in.is_on_leave is not None and operator.role in [Role.SUPER_ADMIN, Role.ADMIN]:
+            target.is_on_leave = user_in.is_on_leave
+            if user_in.is_on_leave:
+                target.leave_date = user_in.leave_date or datetime.now().astimezone().strftime("%Y-%m-%d")
+                target.leave_reason = user_in.leave_reason or "Marked on leave"
+            else:
+                target.leave_date = None
+                target.leave_reason = None
+
+        if user_in.permissions is not None and operator.role in [Role.SUPER_ADMIN, Role.ADMIN]:
+            target.permissions = user_in.permissions
+
         await session.commit()
         await session.refresh(target)
+        return target
+
+    @staticmethod
+    async def set_user_leave(
+        session: AsyncSession,
+        operator: User,
+        user_id: uuid.UUID,
+        payload: UserLeaveUpdate,
+    ) -> User:
+        """
+        Mark or unmark a user as on leave.
+        Provision restricted to Admins and Super Admins.
+        """
+        if operator.role not in [Role.SUPER_ADMIN, Role.ADMIN]:
+            raise HierarchyPermissionError("Only Admins and Super Admins have provision to mark users on leave.")
+
+        target = await UserService.get_by_id(session, user_id)
+        if not target:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        # Cannot mark self on leave
+        if operator.id == target.id:
+            raise HierarchyPermissionError("You cannot mark yourself on leave. This provision is for managing users under you.")
+
+        # Admin cannot mark Super Admin or other Admins on leave (only users under them: In-Charge, Team Leader, Staff)
+        if operator.role == Role.ADMIN:
+            if target.role in [Role.SUPER_ADMIN, Role.ADMIN]:
+                raise HierarchyPermissionError("Admins can only mark users under them in the hierarchy (In-Charge, Team Leader, Staff) on leave.")
+            if operator.branch and target.branch and target.branch.strip().lower() != operator.branch.strip().lower():
+                raise HierarchyPermissionError(f"Admins can only manage leave for users under their branch ('{operator.branch}').")
+
+        local_now = datetime.now().astimezone()
+        today_str = local_now.strftime("%Y-%m-%d")
+
+        target.is_on_leave = payload.is_on_leave
+        if payload.is_on_leave:
+            target.leave_date = payload.leave_date or today_str
+            target.leave_reason = payload.leave_reason or "Marked on leave"
+        else:
+            target.leave_date = None
+            target.leave_reason = None
+
+        # Synchronize with Attendance records
+        target_date = target.leave_date or today_str
+        att_stmt = select(Attendance).where(
+            Attendance.user_id == target.id,
+            Attendance.date == target_date,
+        )
+        att = (await session.execute(att_stmt)).scalar_one_or_none()
+
+        if payload.is_on_leave:
+            if not att:
+                att = Attendance(
+                    user_id=target.id,
+                    date=target_date,
+                    check_in_time=datetime.now(timezone.utc),
+                    status=AttendanceStatus.ON_LEAVE,
+                    check_in_note=f"[ON LEAVE] {target.leave_reason}",
+                )
+                session.add(att)
+            else:
+                att.status = AttendanceStatus.ON_LEAVE
+                att.check_in_note = f"[ON LEAVE] {target.leave_reason}"
+        else:
+            if att and att.status == AttendanceStatus.ON_LEAVE:
+                await session.delete(att)
+
+        await session.commit()
+        await session.refresh(target)
+
+        await broadcaster.broadcast("USER_LEAVE_UPDATED", {
+            "user_id": str(target.id),
+            "is_on_leave": target.is_on_leave,
+            "leave_date": target.leave_date,
+            "leave_reason": target.leave_reason,
+        })
         return target
 
     @staticmethod
@@ -606,6 +695,9 @@ class UserService:
                     updated_at=u.updated_at,
                     last_login_at=last_login,
                     today_first_login_at=today_login,
+                    is_on_leave=u.is_on_leave,
+                    leave_date=u.leave_date,
+                    leave_reason=u.leave_reason,
                     task_stats=user_stats_map[u.id],
                     manager_name=u.manager.full_name if u.manager else None,
                     creator_name=u.creator.full_name if u.creator else None,

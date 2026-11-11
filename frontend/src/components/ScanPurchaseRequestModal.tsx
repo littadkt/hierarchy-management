@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   Scan,
@@ -59,6 +60,12 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [quickPicks, setQuickPicks] = useState<{ code: string; name: string }[]>(SAMPLE_BARCODES);
+  const [suggestions, setSuggestions] = useState<InventoryItem[]>([]);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Assigned Purchase Manager for Staff
   const [myManager, setMyManager] = useState<UserBrief | null>(null);
@@ -70,6 +77,7 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
     setNotes("");
     setLookupState("idle");
     setFoundItem(null);
+    setSuggestions([]);
     setError(null);
     setSuccessMsg(null);
   };
@@ -110,7 +118,7 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
       }
       if (initialCode) {
         setCode(initialCode);
-        handleLookup(initialCode);
+        handleLookup(initialCode, true);
       } else {
         resetForm();
       }
@@ -124,6 +132,7 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
     if (!trimmed) {
       setLookupState("idle");
       setFoundItem(null);
+      setSuggestions([]);
       return;
     }
 
@@ -132,7 +141,8 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
     }
 
     const timer = setTimeout(() => {
-      handleLookup(trimmed);
+      // Auto-lookup only checks for an exact barcode match without mutating user input
+      handleLookup(trimmed, false);
     }, 450);
 
     return () => clearTimeout(timer);
@@ -140,44 +150,79 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
 
   const handleCameraScan = (scannedCode: string) => {
     setCode(scannedCode);
-    handleLookup(scannedCode);
+    handleLookup(scannedCode, true);
     setIsCameraOpen(false);
   };
 
-  const handleLookup = async (codeToLookup?: string) => {
+  const handleLookup = async (codeToLookup?: string, isExplicit = false) => {
     const targetCode = (codeToLookup ?? code).trim();
     if (!targetCode) {
-      setError("Please enter or scan a barcode first.");
+      if (isExplicit) {
+        setError("Please enter or scan a barcode first.");
+      }
       return;
     }
 
-    setLookupState("loading");
-    setError(null);
-    setSuccessMsg(null);
+    if (isExplicit) {
+      setLookupState("loading");
+      setError(null);
+      setSuccessMsg(null);
+      setSuggestions([]);
+    }
 
     try {
-      // 1. Direct barcode lookup
+      // 1. Direct barcode lookup (exact match)
       const item = await inventoryApi.byCode(targetCode);
-      setFoundItem(item);
-      setCode(item.code);
-      setLookupState("found");
+      if (item) {
+        setFoundItem(item);
+        setLookupState("found");
+        setSuggestions([]);
+        setError(null);
+        if (isExplicit) {
+          setCode(item.code);
+        }
+        return;
+      }
     } catch {
-      // 2. Fallback: Search inventory by query (in case user entered product name or partial code)
-      try {
-        const searchRes = await inventoryApi.list({ search: targetCode, limit: 1 });
-        if (searchRes.items && searchRes.items.length > 0) {
+      // Direct lookup 404
+    }
+
+    // If auto-looking up while typing (not explicit button click), do NOT overwrite user input or guess
+    if (!isExplicit) {
+      setFoundItem(null);
+      setLookupState("idle");
+      return;
+    }
+
+    // 2. Explicit search fallback: Search inventory by query (in case user entered product name or partial code)
+    try {
+      const searchRes = await inventoryApi.list({ search: targetCode, limit: 6 });
+      if (searchRes.items && searchRes.items.length > 0) {
+        // If single match found
+        if (searchRes.items.length === 1) {
           const item = searchRes.items[0];
           setFoundItem(item);
           setCode(item.code);
           setLookupState("found");
+          setSuggestions([]);
+          setError(null);
           return;
         }
-      } catch {
-        // Search error fallback
+
+        // Multiple matches: show suggestions to pick
+        setSuggestions(searchRes.items);
+        setFoundItem(null);
+        setLookupState("idle");
+        setError(null);
+        return;
       }
-      setFoundItem(null);
-      setLookupState("not_found");
+    } catch {
+      // Search error fallback
     }
+
+    setFoundItem(null);
+    setSuggestions([]);
+    setLookupState("not_found");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -221,12 +266,12 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
   const totalCost = Number(foundItem?.rate || 0) * Number(quantity || 0);
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
       <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col">
         {/* Header */}
         <div className="px-5 sm:px-6 py-4 sm:py-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-gradient-to-r from-indigo-50/50 to-purple-50/50 dark:from-indigo-950/20 dark:to-purple-950/20 shrink-0">
@@ -339,7 +384,7 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      handleLookup(code);
+                      handleLookup(code, true);
                     }
                   }}
                   placeholder="Scan or enter barcode (e.g. 8901030383921)"
@@ -358,7 +403,7 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleLookup()}
+                  onClick={() => handleLookup(code, true)}
                   disabled={lookupState === "loading" || !code.trim()}
                   className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs disabled:opacity-50 flex items-center gap-1.5 shadow-xs transition-colors shrink-0"
                 >
@@ -381,7 +426,7 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
                   type="button"
                   onClick={() => {
                     setCode(s.code);
-                    handleLookup(s.code);
+                    handleLookup(s.code, true);
                   }}
                   className="px-2 py-0.5 rounded-md text-[10px] bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors"
                 >
@@ -389,6 +434,43 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
                 </button>
               ))}
             </div>
+
+            {/* Multiple Search Match Suggestions */}
+            {suggestions.length > 0 && (
+              <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-2xl space-y-2">
+                <p className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                  <span>Matching products found in inventory. Click to select:</span>
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {suggestions.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setFoundItem(item);
+                        setCode(item.code);
+                        setLookupState("found");
+                        setSuggestions([]);
+                      }}
+                      className="p-2.5 rounded-xl border border-indigo-100 dark:border-indigo-800 bg-white dark:bg-slate-900 hover:border-indigo-400 dark:hover:border-indigo-600 text-left transition-all cursor-pointer flex items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                          {item.name}
+                        </p>
+                        <p className="text-[11px] font-mono text-indigo-600 dark:text-indigo-400">
+                          {item.code}
+                        </p>
+                      </div>
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-300 shrink-0">
+                        ₹{(item.rate || 0).toLocaleString()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Barcode Match Result / Product Details View */}
@@ -406,6 +488,12 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
                         <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/70 text-indigo-700 dark:text-indigo-300">
                           {foundItem.code}
                         </span>
+                        {foundItem.branch_name && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            <Building className="w-2.5 h-2.5" />
+                            <span>{foundItem.branch_name}</span>
+                          </span>
+                        )}
                         <span
                           className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
                             foundItem.quantity > 5
@@ -595,6 +683,7 @@ export const ScanPurchaseRequestModal: React.FC<ScanPurchaseRequestModalProps> =
         onScan={handleCameraScan}
         onClose={() => setIsCameraOpen(false)}
       />
-    </div>
+    </div>,
+    document.body
   );
 };

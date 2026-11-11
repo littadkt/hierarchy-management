@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, List, Optional
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -100,6 +100,27 @@ class User(Base):
         index=True,
     )
 
+    # Leave tracking fields
+    is_on_leave: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+    leave_date: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True,
+        index=True,
+    )
+    leave_reason: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    # Window permissions overrides: {"window_id": {"add": bool, "display": bool, "edit": bool, "delete": bool}}
+    permissions: Mapped[Optional[dict]] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=True,
+    )
+
     # Self-referential relationships
     manager: Mapped[Optional["User"]] = relationship(
         "User",
@@ -157,6 +178,7 @@ class User(Base):
     checklist_items: Mapped[List["ChecklistItem"]] = relationship(
         "ChecklistItem",
         back_populates="user",
+        foreign_keys="[ChecklistItem.user_id]",
         cascade="all, delete-orphan",
         order_by="desc(ChecklistItem.created_at)",
     )

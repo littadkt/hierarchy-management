@@ -16,7 +16,14 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.permissions import HierarchyPermissionError
 from app.core.scheduler import start_scheduler, stop_scheduler
-from app.db.init_db import init_branches, init_demo_users, init_departments, init_models, init_super_admin
+from app.db.init_db import (
+    init_branches,
+    init_demo_users,
+    init_departments,
+    init_models,
+    init_super_admin,
+    init_warranty_defaults,
+)
 from app.db.session import AsyncSessionLocal
 
 logging.basicConfig(
@@ -38,6 +45,7 @@ async def lifespan(app: FastAPI):
         await init_branches(session)
         await init_departments(session)
         await init_demo_users(session)
+        await init_warranty_defaults(session)
 
     logger.info("Starting background recurrence scheduler...")
     try:
@@ -100,6 +108,17 @@ async def hierarchy_permission_exception_handler(request: Request, exc: Hierarch
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail, "error_type": "HierarchyPermissionError"},
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import traceback
+    tb = traceback.format_exc()
+    logger.error(f"Global unhandled exception on {request.method} {request.url}: {exc}\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
     )
 
 

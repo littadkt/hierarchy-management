@@ -4,10 +4,11 @@ import uuid
 from fastapi import HTTPException, status
 from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.core.broadcaster import broadcaster
 from app.core.permissions import HierarchyPermissionError
+from app.models.branch import Branch
 from app.models.inventory import InventoryItem
 from app.models.purchase_request import (
     PurchaseRequest,
@@ -164,8 +165,16 @@ class PurchaseService:
         All user types have the provision to submit a purchase request
         to the designated purchase manager.
         """
-        # 1. Check if barcode is already present in inventory
-        inventory_item = await InventoryService.get_by_code(session, request_in.code)
+        # 1. Resolve requester branch and look up item in branch inventory
+        requester_branch_id = None
+        if requester.branch:
+            b_stmt = select(Branch.id).where(Branch.name.ilike(requester.branch.strip()))
+            requester_branch_id = (await session.execute(b_stmt)).scalar_one_or_none()
+
+        inventory_item = await InventoryService.get_by_code(session, request_in.code, branch_id=requester_branch_id)
+        if not inventory_item:
+            # Fallback to any branch if not found in requester branch
+            inventory_item = await InventoryService.get_by_code(session, request_in.code)
 
         # 2. Determine Purchase Manager according to hierarchy rules:
         # - Staff: defaults to their Team Leader (changing option not allowed for staff)
@@ -259,6 +268,8 @@ class PurchaseService:
         current_user: User,
         status_filter: Optional[PurchaseRequestStatus] = None,
         search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        order: Optional[str] = "desc",
         skip: int = 0,
         limit: int = 50,
     ) -> Tuple[List[PurchaseRequest], int]:
@@ -368,7 +379,33 @@ class PurchaseService:
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await session.execute(count_stmt)).scalar() or 0
 
-        stmt = stmt.order_by(desc(PurchaseRequest.created_at)).offset(skip).limit(limit)
+        is_asc = (order or "desc").lower() == "asc"
+        if sort_by == "user":
+            user_alias = aliased(User)
+            stmt = stmt.outerjoin(user_alias, PurchaseRequest.requested_by_id == user_alias.id)
+            if is_asc:
+                stmt = stmt.order_by(user_alias.full_name.asc().nulls_last(), desc(PurchaseRequest.created_at))
+            else:
+                stmt = stmt.order_by(user_alias.full_name.desc().nulls_last(), desc(PurchaseRequest.created_at))
+        elif sort_by == "total":
+            if is_asc:
+                stmt = stmt.order_by((PurchaseRequest.rate * PurchaseRequest.quantity).asc(), desc(PurchaseRequest.created_at))
+            else:
+                stmt = stmt.order_by((PurchaseRequest.rate * PurchaseRequest.quantity).desc(), desc(PurchaseRequest.created_at))
+        elif sort_by in ["date", "created_at"]:
+            if is_asc:
+                stmt = stmt.order_by(PurchaseRequest.created_at.asc())
+            else:
+                stmt = stmt.order_by(desc(PurchaseRequest.created_at))
+        elif sort_by == "name":
+            if is_asc:
+                stmt = stmt.order_by(PurchaseRequest.name.asc(), desc(PurchaseRequest.created_at))
+            else:
+                stmt = stmt.order_by(PurchaseRequest.name.desc(), desc(PurchaseRequest.created_at))
+        else:
+            stmt = stmt.order_by(desc(PurchaseRequest.created_at))
+
+        stmt = stmt.offset(skip).limit(limit)
         result = await session.execute(stmt)
         requests = result.scalars().all()
 
@@ -454,13 +491,20 @@ class PurchaseService:
         if new_status == PurchaseRequestStatus.RECEIVED:
             pr.completed_at = datetime.now(timezone.utc)
 
-            # Auto-update inventory stock or create new item
-            inv_item = await InventoryService.get_by_code(session, pr.code)
+            # Resolve target branch from requester
+            target_branch_id = None
+            if pr.requested_by and pr.requested_by.branch:
+                b_stmt = select(Branch.id).where(Branch.name.ilike(pr.requested_by.branch.strip()))
+                target_branch_id = (await session.execute(b_stmt)).scalar_one_or_none()
+
+            # Auto-update inventory stock for that branch or create new item
+            inv_item = await InventoryService.get_by_code(session, pr.code, branch_id=target_branch_id)
             if inv_item:
                 inv_item.quantity += pr.quantity
             else:
-                # Add product into inventory database
+                # Add product into branch inventory
                 new_inv = InventoryItem(
+                    branch_id=target_branch_id,
                     code=pr.code,
                     name=pr.name,
                     rate=pr.rate,

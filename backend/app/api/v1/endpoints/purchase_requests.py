@@ -104,6 +104,8 @@ async def create_purchase_request(
 async def list_purchase_requests(
     status: Optional[PurchaseRequestStatus] = None,
     search: Optional[str] = None,
+    sort_by: Optional[str] = Query(None, description="Sort field: 'user', 'date', 'total', 'name'"),
+    order: Optional[str] = Query("desc", description="Sort direction: 'asc' or 'desc'"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
@@ -114,12 +116,15 @@ async def list_purchase_requests(
     - Super Admin & Admin: See all purchase requests.
     - Purchase Manager: Sees all purchase requests.
     - Other users: See their own submitted purchase requests.
+    Supports sorting by users, date, and total value.
     """
     requests, total = await PurchaseService.list_purchase_requests(
         session=session,
         current_user=current_user,
         status_filter=status,
         search=search,
+        sort_by=sort_by,
+        order=order,
         skip=skip,
         limit=limit,
     )

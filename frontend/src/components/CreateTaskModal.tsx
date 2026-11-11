@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   X,
   Calendar,
@@ -12,9 +12,14 @@ import {
   Trash2,
   ListTodo,
   CheckCircle2,
+  Paperclip,
+  UploadCloud,
+  GripVertical,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { tasksApi, usersApi, getErrorMessage } from "@/lib/api";
+import { attachmentsApi, tasksApi, usersApi, getErrorMessage } from "@/lib/api";
 import { RecurrencePattern, TaskPriority, UserBrief } from "@/lib/types";
 import { RoleBadge } from "./RoleBadge";
 
@@ -75,18 +80,91 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
     });
   };
 
-  // Subtasks list
-  const [subtasks, setSubtasks] = useState<{ title: string; description?: string }[]>([]);
+  // Subtasks / checklist list
+  interface StagedSubtask {
+    title: string;
+    description?: string;
+    files?: File[];
+  }
+  const [subtasks, setSubtasks] = useState<StagedSubtask[]>([]);
   const [newSubtaskInput, setNewSubtaskInput] = useState("");
+  const [newSubtaskFiles, setNewSubtaskFiles] = useState<File[]>([]);
+  const subtaskFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Staged file attachments for main task
+  const [taskFiles, setTaskFiles] = useState<File[]>([]);
 
   const handleAddSubtask = () => {
     if (!newSubtaskInput.trim()) return;
-    setSubtasks((prev) => [...prev, { title: newSubtaskInput.trim() }]);
+    setSubtasks((prev) => [
+      ...prev,
+      {
+        title: newSubtaskInput.trim(),
+        files: newSubtaskFiles.length > 0 ? [...newSubtaskFiles] : undefined,
+      },
+    ]);
     setNewSubtaskInput("");
+    setNewSubtaskFiles([]);
+    if (subtaskFileInputRef.current) {
+      subtaskFileInputRef.current.value = "";
+    }
   };
 
   const handleRemoveSubtask = (index: number) => {
     setSubtasks((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Drag-and-drop & rearrangement state for staged subtasks
+  const [draggedSubtaskIdx, setDraggedSubtaskIdx] = useState<number | null>(null);
+  const [dragOverSubtaskIdx, setDragOverSubtaskIdx] = useState<number | null>(null);
+
+  const handleSubtaskDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedSubtaskIdx(index);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", index.toString());
+  };
+
+  const handleSubtaskDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverSubtaskIdx !== index) {
+      setDragOverSubtaskIdx(index);
+    }
+  };
+
+  const handleSubtaskDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (draggedSubtaskIdx === null || draggedSubtaskIdx === targetIndex) {
+      setDraggedSubtaskIdx(null);
+      setDragOverSubtaskIdx(null);
+      return;
+    }
+
+    setSubtasks((prev) => {
+      const reordered = [...prev];
+      const [moved] = reordered.splice(draggedSubtaskIdx, 1);
+      reordered.splice(targetIndex, 0, moved);
+      return reordered;
+    });
+    setDraggedSubtaskIdx(null);
+    setDragOverSubtaskIdx(null);
+  };
+
+  const handleSubtaskDragEnd = () => {
+    setDraggedSubtaskIdx(null);
+    setDragOverSubtaskIdx(null);
+  };
+
+  const handleMoveSubtask = (currentIndex: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= subtasks.length) return;
+
+    setSubtasks((prev) => {
+      const reordered = [...prev];
+      const [moved] = reordered.splice(currentIndex, 1);
+      reordered.splice(targetIndex, 0, moved);
+      return reordered;
+    });
   };
 
   const [loading, setLoading] = useState(false);
@@ -170,10 +248,47 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
             : null,
         recurrence_end_date:
           isRecurring && recurrenceEndDate ? new Date(recurrenceEndDate).toISOString() : null,
-        subtasks: subtasks.length > 0 ? subtasks : undefined,
+        subtasks:
+          subtasks.length > 0
+            ? subtasks.map((s) => ({ title: s.title, description: s.description }))
+            : undefined,
       };
 
-      await tasksApi.create(payload);
+      const createdTask = await tasksApi.create(payload);
+
+      // Upload task-level file attachments
+      if (taskFiles.length > 0 && createdTask?.id) {
+        try {
+          const uploader = attachmentsApi?.upload || tasksApi?.uploadAttachments;
+          if (uploader) {
+            await uploader(createdTask.id, taskFiles);
+          }
+        } catch (uploadErr) {
+          console.error("Failed to upload attachments on task creation", uploadErr);
+        }
+      }
+
+      // Upload subtask-level checklist file attachments
+      const subtasksWithFiles = subtasks.filter((s) => s.files && s.files.length > 0);
+      if (subtasksWithFiles.length > 0 && createdTask?.id) {
+        try {
+          const freshSubtasks = await tasksApi.getSubtasks(createdTask.id);
+          for (const s of subtasksWithFiles) {
+            const matched = freshSubtasks.find(
+              (fs) => fs.title.trim().toLowerCase() === s.title.trim().toLowerCase()
+            );
+            if (matched && s.files && s.files.length > 0) {
+              const uploader = attachmentsApi?.upload || tasksApi?.uploadAttachments;
+              if (uploader) {
+                await uploader(createdTask.id, s.files, matched.id);
+              }
+            }
+          }
+        } catch (subtaskUploadErr) {
+          console.error("Failed to upload subtask attachments on task creation", subtaskUploadErr);
+        }
+      }
+
       onTaskCreated();
       onClose();
       // Reset form
@@ -184,6 +299,8 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
       setRecurrenceDaysOfWeek([0, 1, 2, 3, 4, 5, 6]);
       setSubtasks([]);
       setNewSubtaskInput("");
+      setNewSubtaskFiles([]);
+      setTaskFiles([]);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -545,6 +662,11 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                   </span>
                 )}
               </label>
+              {subtasks.length > 1 && (
+                <span className="text-[10px] text-slate-400 font-normal">
+                  • Drag ⠿ or click arrows to rearrange
+                </span>
+              )}
             </div>
 
             <p className="text-[11px] text-slate-500">
@@ -554,29 +676,83 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
             </p>
 
             {/* Input row */}
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newSubtaskInput}
-                onChange={(e) => setNewSubtaskInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    handleAddSubtask();
-                  }
-                }}
-                placeholder="Enter subtask title (e.g. Inspect equipment, Take meter reading)..."
-                className="flex-1 px-3.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              <button
-                type="button"
-                onClick={handleAddSubtask}
-                disabled={!newSubtaskInput.trim()}
-                className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-40 flex items-center gap-1.5 transition-all shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add</span>
-              </button>
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newSubtaskInput}
+                  onChange={(e) => setNewSubtaskInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddSubtask();
+                    }
+                  }}
+                  placeholder="Enter subtask title (e.g. Inspect equipment, Take meter reading)..."
+                  className="flex-1 px-3.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+
+                <input
+                  type="file"
+                  ref={subtaskFileInputRef}
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      setNewSubtaskFiles(Array.from(e.target.files));
+                    }
+                  }}
+                />
+
+                <button
+                  type="button"
+                  onClick={() => subtaskFileInputRef.current?.click()}
+                  title="Attach file(s) to this subtask"
+                  className={`px-3 py-2 text-xs font-medium rounded-xl border flex items-center gap-1.5 transition-all shrink-0 ${
+                    newSubtaskFiles.length > 0
+                      ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 font-semibold"
+                      : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+                  }`}
+                >
+                  <Paperclip className="w-3.5 h-3.5" />
+                  <span>
+                    {newSubtaskFiles.length > 0
+                      ? `${newSubtaskFiles.length} file(s)`
+                      : "Attach file"}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleAddSubtask}
+                  disabled={!newSubtaskInput.trim()}
+                  className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-40 flex items-center gap-1.5 transition-all shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add</span>
+                </button>
+              </div>
+
+              {newSubtaskFiles.length > 0 && (
+                <div className="flex items-center justify-between text-[11px] bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/50 px-3 py-1.5 rounded-lg text-indigo-700 dark:text-indigo-300">
+                  <span className="flex items-center gap-1.5 truncate">
+                    <Paperclip className="w-3 h-3 shrink-0" />
+                    <span>
+                      {newSubtaskFiles.map((f) => f.name).join(", ")} ({newSubtaskFiles.length} file(s) selected)
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewSubtaskFiles([]);
+                      if (subtaskFileInputRef.current) subtaskFileInputRef.current.value = "";
+                    }}
+                    className="ml-2 text-indigo-500 hover:text-rose-600 font-bold"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Subtask items list */}
@@ -585,13 +761,74 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                 {subtasks.map((st, idx) => (
                   <div
                     key={idx}
-                    className="flex items-center justify-between gap-2 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-800 text-xs shadow-2xs"
+                    draggable
+                    onDragStart={(e) => handleSubtaskDragStart(e, idx)}
+                    onDragOver={(e) => handleSubtaskDragOver(e, idx)}
+                    onDrop={(e) => handleSubtaskDrop(e, idx)}
+                    onDragEnd={handleSubtaskDragEnd}
+                    className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border transition-all text-xs shadow-2xs select-none ${
+                      draggedSubtaskIdx === idx
+                        ? "opacity-35 border-dashed border-indigo-400 bg-indigo-50/50"
+                        : "border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-800"
+                    } ${
+                      dragOverSubtaskIdx === idx && draggedSubtaskIdx !== idx
+                        ? "border-t-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50/20"
+                        : ""
+                    }`}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      {/* Drag Handle & Up/Down Arrows */}
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <div
+                          draggable
+                          onDragStart={(e) => {
+                            e.stopPropagation();
+                            handleSubtaskDragStart(e, idx);
+                          }}
+                          className="p-1 text-slate-300 dark:text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-grab active:cursor-grabbing"
+                          title="Drag ⠿ to rearrange"
+                        >
+                          <GripVertical className="w-3.5 h-3.5" />
+                        </div>
+                        {subtasks.length > 1 && (
+                          <div className="flex flex-col -space-y-1">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveSubtask(idx, "up")}
+                              title="Move up"
+                              className="text-slate-300 hover:text-indigo-600 dark:text-slate-600 dark:hover:text-indigo-400 disabled:opacity-20 disabled:hover:text-slate-300 p-0.5"
+                            >
+                              <ChevronUp className="w-2.5 h-2.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === subtasks.length - 1}
+                              onClick={() => handleMoveSubtask(idx, "down")}
+                              title="Move down"
+                              className="text-slate-300 hover:text-indigo-600 dark:text-slate-600 dark:hover:text-indigo-400 disabled:opacity-20 disabled:hover:text-slate-300 p-0.5"
+                            >
+                              <ChevronDown className="w-2.5 h-2.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
                       <span className="w-5 h-5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 flex items-center justify-center text-[10px] font-bold shrink-0">
                         {idx + 1}
                       </span>
                       <span className="text-slate-800 dark:text-slate-200 truncate">{st.title}</span>
+                      {st.files && st.files.length > 0 && (
+                        <span
+                          title={st.files.map((f) => f.name).join(", ")}
+                          className="inline-flex items-center gap-1 text-[10px] font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 px-1.5 py-0.5 rounded shrink-0"
+                        >
+                          <Paperclip className="w-2.5 h-2.5" />
+                          <span>
+                            {st.files.length} {st.files.length === 1 ? "file" : "files"}
+                          </span>
+                        </span>
+                      )}
                     </div>
                     <button
                       type="button"
@@ -605,6 +842,78 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                 ))}
               </div>
             )}
+          </div>
+
+          {/* FILE ATTACHMENTS SECTION */}
+          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                <Paperclip className="w-4 h-4 text-indigo-600" />
+                <span>File Attachments (Optional)</span>
+                {taskFiles.length > 0 && (
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                    {taskFiles.length}
+                  </span>
+                )}
+              </label>
+            </div>
+            <p className="text-[11px] text-slate-500">
+              Attach relevant documents, photos, spreadsheets, or instructions for this task.
+            </p>
+
+            <div className="flex flex-col gap-2">
+              <label className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-indigo-500 dark:hover:border-indigo-400 rounded-xl p-4 text-center cursor-pointer bg-white dark:bg-slate-800/60 hover:bg-indigo-50/30 transition-all flex flex-col items-center justify-center">
+                <UploadCloud className="w-6 h-6 text-slate-400 mb-1" />
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  Click to select files
+                </span>
+                <span className="text-[10px] text-slate-400 mt-0.5">
+                  Any document, PDF, image, spreadsheet up to 50MB
+                </span>
+                <input
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      const newArr = Array.from(e.target.files);
+                      setTaskFiles((prev) => [...prev, ...newArr]);
+                    }
+                  }}
+                />
+              </label>
+
+              {taskFiles.length > 0 && (
+                <div className="space-y-1.5 max-h-36 overflow-y-auto pt-1">
+                  {taskFiles.map((f, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between gap-2 p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Paperclip className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                        <span className="truncate text-slate-800 dark:text-slate-200 font-medium">
+                          {f.name}
+                        </span>
+                        <span className="text-[10px] text-slate-400 shrink-0">
+                          ({(f.size / 1024).toFixed(0)} KB)
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setTaskFiles((prev) => prev.filter((_, idx) => idx !== i))
+                        }
+                        className="p-1 text-slate-400 hover:text-rose-500 rounded"
+                        title="Remove file"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Footer Actions */}

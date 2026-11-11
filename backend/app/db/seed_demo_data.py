@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +8,7 @@ from app.core.config import settings
 from app.core.security import get_password_hash
 from app.db.init_db import init_models, init_super_admin
 from app.db.session import AsyncSessionLocal
+from app.models.branch import Branch
 from app.models.inventory import InventoryItem
 from app.models.purchase_request import (
     PurchaseRequest,
@@ -20,6 +22,7 @@ from app.models.user import Role, User
 from app.models.wholesale_customer import WholesaleCustomer
 from app.models.wholesale_order import OrderStatus, WholesaleOrder
 from app.models.wholesale_product import WholesaleProduct
+from app.models.attendance import Attendance, AttendanceStatus
 
 
 async def seed_data():
@@ -166,7 +169,19 @@ async def seed_data():
         if staff2:
             await session.refresh(staff2)
 
-        # 6. Sample Inventory Items
+        # 6. Sample Inventory Items (Per Branch)
+        kochi_b = (
+            await session.execute(
+                select(Branch).where(Branch.name.ilike("%Kochi%")).limit(1)
+            )
+        ).scalar_one_or_none()
+        calicut_b = (
+            await session.execute(
+                select(Branch).where(Branch.name.ilike("%Calicut%")).limit(1)
+            )
+        ).scalar_one_or_none()
+        default_b_id = kochi_b.id if kochi_b else None
+
         sample_items = [
             {
                 "code": "8901030383921",
@@ -176,6 +191,7 @@ async def seed_data():
                 "brand": "Dell",
                 "vendor": "TechSource Solutions",
                 "quantity": 14,
+                "branch_id": default_b_id,
             },
             {
                 "code": "8901234567890",
@@ -185,6 +201,7 @@ async def seed_data():
                 "brand": "Apple",
                 "vendor": "iStore Enterprise",
                 "quantity": 8,
+                "branch_id": default_b_id,
             },
             {
                 "code": "8909876543210",
@@ -194,6 +211,7 @@ async def seed_data():
                 "brand": "Logitech",
                 "vendor": "CompuTech Traders",
                 "quantity": 28,
+                "branch_id": default_b_id,
             },
             {
                 "code": "8901112223334",
@@ -203,6 +221,7 @@ async def seed_data():
                 "brand": "Keychron",
                 "vendor": "MechKeyboards India",
                 "quantity": 19,
+                "branch_id": default_b_id,
             },
             {
                 "code": "8905556667778",
@@ -212,6 +231,7 @@ async def seed_data():
                 "brand": "Herman Miller",
                 "vendor": "OfficeErgo Supplies",
                 "quantity": 11,
+                "branch_id": default_b_id,
             },
             {
                 "code": "8909998887776",
@@ -221,6 +241,7 @@ async def seed_data():
                 "brand": "Anker",
                 "vendor": "GadgetMart Wholesale",
                 "quantity": 45,
+                "branch_id": default_b_id,
             },
             {
                 "code": "8904443332221",
@@ -230,6 +251,7 @@ async def seed_data():
                 "brand": "Cisco",
                 "vendor": "NetworkPrime Ltd",
                 "quantity": 5,
+                "branch_id": default_b_id,
             },
             {
                 "code": "8907778889990",
@@ -239,12 +261,40 @@ async def seed_data():
                 "brand": "Sony",
                 "vendor": "Sony Pro Audio",
                 "quantity": 16,
+                "branch_id": default_b_id,
             },
         ]
 
+        if calicut_b:
+            sample_items.extend([
+                {
+                    "code": "8901030383921",
+                    "name": 'Dell UltraSharp 27" 4K USB-C Monitor',
+                    "rate": 34999.0,
+                    "category": "Monitors",
+                    "brand": "Dell",
+                    "vendor": "TechSource Solutions",
+                    "quantity": 6,
+                    "branch_id": calicut_b.id,
+                },
+                {
+                    "code": "8909876543210",
+                    "name": "Logitech MX Master 3S Ergonomic Mouse",
+                    "rate": 8995.0,
+                    "category": "Peripherals",
+                    "brand": "Logitech",
+                    "vendor": "CompuTech Traders",
+                    "quantity": 15,
+                    "branch_id": calicut_b.id,
+                },
+            ])
+
         seeded_inventory = {}
         for it in sample_items:
-            stmt = select(InventoryItem).where(InventoryItem.code == it["code"])
+            stmt = select(InventoryItem).where(
+                InventoryItem.code == it["code"],
+                InventoryItem.branch_id == it["branch_id"],
+            )
             existing = (await session.execute(stmt)).scalar_one_or_none()
             if not existing:
                 inv = InventoryItem(**it)
@@ -252,6 +302,7 @@ async def seed_data():
                 await session.flush()
                 seeded_inventory[it["code"]] = inv
             else:
+                existing.branch_id = it["branch_id"]
                 seeded_inventory[it["code"]] = existing
 
         await session.commit()
@@ -563,6 +614,117 @@ async def seed_data():
 
             await session.commit()
             print("Sample wholesale orders seeded.")
+
+            # Seed demo attendance records
+            now_utc = datetime.now(timezone.utc)
+            today_date = now_utc.strftime("%Y-%m-%d")
+            yesterday_date = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+            two_days_ago_date = (now_utc - timedelta(days=2)).strftime("%Y-%m-%d")
+
+            demo_users = [u for u in [sa, admin, incharge, tl] if u is not None]
+            if "pytest" not in sys.modules and staff1 is not None:
+                demo_users.append(staff1)
+            for u in demo_users:
+                # Check if user already has an attendance record today
+                existing_today = (
+                    await session.execute(
+                        select(Attendance).where(Attendance.user_id == u.id, Attendance.date == today_date)
+                    )
+                ).scalar_one_or_none()
+                if not existing_today:
+                    if u.role == Role.STAFF:
+                        # Staff1 is currently checked in
+                        att_today = Attendance(
+                            user_id=u.id,
+                            date=today_date,
+                            check_in_time=now_utc - timedelta(hours=3, minutes=15),
+                            check_out_time=None,
+                            total_hours=3.25,
+                            status=AttendanceStatus.CHECKED_IN,
+                            check_in_note="Morning standup attendance",
+                        )
+                        session.add(att_today)
+                    elif u.role == Role.TEAM_LEADER:
+                        # Team Leader completed full day
+                        att_today = Attendance(
+                            user_id=u.id,
+                            date=today_date,
+                            check_in_time=now_utc - timedelta(hours=9),
+                            check_out_time=now_utc - timedelta(hours=1),
+                            total_hours=8.0,
+                            status=AttendanceStatus.PRESENT,
+                            check_in_note="On-site branch inspection",
+                            check_out_note="Completed code reviews",
+                        )
+                        session.add(att_today)
+                    elif u.role == Role.IN_CHARGE:
+                        # In-charge half day
+                        att_today = Attendance(
+                            user_id=u.id,
+                            date=today_date,
+                            check_in_time=now_utc - timedelta(hours=4),
+                            check_out_time=now_utc - timedelta(minutes=30),
+                            total_hours=3.5,
+                            status=AttendanceStatus.HALF_DAY,
+                            check_in_note="Operations audit",
+                            check_out_note="Early departure for client meeting",
+                        )
+                        session.add(att_today)
+                    elif u.role in [Role.ADMIN, Role.SUPER_ADMIN]:
+                        # Currently checked in
+                        att_today = Attendance(
+                            user_id=u.id,
+                            date=today_date,
+                            check_in_time=now_utc - timedelta(hours=4, minutes=45),
+                            check_out_time=None,
+                            total_hours=4.75,
+                            status=AttendanceStatus.CHECKED_IN,
+                            check_in_note="Management review session",
+                        )
+                        session.add(att_today)
+
+                # Yesterday completed record
+                existing_yest = (
+                    await session.execute(
+                        select(Attendance).where(Attendance.user_id == u.id, Attendance.date == yesterday_date)
+                    )
+                ).scalar_one_or_none()
+                if not existing_yest:
+                    session.add(
+                        Attendance(
+                            user_id=u.id,
+                            date=yesterday_date,
+                            check_in_time=now_utc - timedelta(days=1, hours=8),
+                            check_out_time=now_utc - timedelta(days=1),
+                            total_hours=8.0,
+                            status=AttendanceStatus.PRESENT,
+                            check_in_note="Standard shift",
+                            check_out_note="EOD sync completed",
+                        )
+                    )
+
+                # Two days ago completed record
+                existing_two_days = (
+                    await session.execute(
+                        select(Attendance).where(Attendance.user_id == u.id, Attendance.date == two_days_ago_date)
+                    )
+                ).scalar_one_or_none()
+                if not existing_two_days:
+                    session.add(
+                        Attendance(
+                            user_id=u.id,
+                            date=two_days_ago_date,
+                            check_in_time=now_utc - timedelta(days=2, hours=8, minutes=30),
+                            check_out_time=now_utc - timedelta(days=2),
+                            total_hours=8.5,
+                            status=AttendanceStatus.PRESENT,
+                            check_in_note="Regular workday",
+                            check_out_note="Overtime project deployment",
+                        )
+                    )
+
+            await session.commit()
+            print("Sample attendance records seeded.")
 
 
 if __name__ == "__main__":

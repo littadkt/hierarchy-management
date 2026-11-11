@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.models.task_activity import TaskActivity
     from app.models.task_comment import TaskComment
     from app.models.subtask import Subtask
+    from app.models.attachment import TaskAttachment
 
 
 class TaskStatus(str, enum.Enum):
@@ -127,6 +128,9 @@ class Task(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    order_index: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -184,8 +188,26 @@ class Task(Base):
         "Subtask",
         back_populates="task",
         cascade="all, delete-orphan",
-        order_by="asc(Subtask.created_at)",
+        order_by="asc(Subtask.order_index), asc(Subtask.created_at)",
     )
+    attachments: Mapped[List["TaskAttachment"]] = relationship(
+        "TaskAttachment",
+        primaryjoin="and_(Task.id==TaskAttachment.task_id, TaskAttachment.subtask_id==None)",
+        cascade="all, delete-orphan",
+        order_by="desc(TaskAttachment.created_at)",
+        overlaps="all_attachments,task",
+    )
+    all_attachments: Mapped[List["TaskAttachment"]] = relationship(
+        "TaskAttachment",
+        foreign_keys="[TaskAttachment.task_id]",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        overlaps="attachments",
+    )
+
+    @property
+    def attachments_count(self) -> int:
+        return len(self.attachments) if "attachments" in self.__dict__ else 0
 
     @property
     def comments_count(self) -> int:

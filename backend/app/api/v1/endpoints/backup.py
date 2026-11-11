@@ -108,15 +108,11 @@ async def download_backup(
 async def restore_from_uploaded_file(
     file: UploadFile = File(...),
     current_user: User = Depends(require_roles(Role.SUPER_ADMIN)),
-    session: AsyncSession = Depends(get_db),
 ) -> Any:
     """
-    Restores the database by uploading a backup (.sql) data file from the user's system.
+    Restores the database by uploading a backup (.sql, .dump, .backup) data file from the user's system.
     Restricted strictly to Super Admin only.
     """
-    # Rollback current read transaction so table locks are freed
-    await session.rollback()
-
     if not file.filename or not file.filename.lower().endswith((".sql", ".dump", ".backup")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -154,14 +150,11 @@ async def restore_from_uploaded_file(
 async def restore_from_existing_backup(
     filename: str,
     current_user: User = Depends(require_roles(Role.SUPER_ADMIN)),
-    session: AsyncSession = Depends(get_db),
 ) -> Any:
     """
     Restores the database from an existing backup in the local backup directory.
     Restricted strictly to Super Admin only.
     """
-    # Rollback current read transaction so table locks are freed
-    await session.rollback()
     target = BackupService.get_backup_path(filename)
     return await BackupService.restore_from_file(target)
 

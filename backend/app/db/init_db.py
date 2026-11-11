@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 async def init_models() -> None:
     """Create database tables if they do not exist and ensure columns exist"""
     async with engine.begin() as conn:
+        await conn.execute(
+            text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'warrantystatus') THEN
+                    CREATE TYPE warrantystatus AS ENUM ('RECEIVED', 'SEND_TO_COMPANY', 'WARRANTY_COMPLETED', 'REJECTED', 'DELIVERED');
+                END IF;
+            END$$;
+            """)
+        )
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_purchase_manager BOOLEAN DEFAULT FALSE NOT NULL;")
@@ -36,10 +46,80 @@ async def init_models() -> None:
             text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_days_of_week VARCHAR(50);")
         )
         await conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS task_attachments (
+                id UUID PRIMARY KEY,
+                task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                subtask_id UUID REFERENCES subtasks(id) ON DELETE CASCADE,
+                filename VARCHAR(255) NOT NULL,
+                stored_filename VARCHAR(255) NOT NULL,
+                file_path VARCHAR(500) NOT NULL,
+                file_size INTEGER NOT NULL,
+                content_type VARCHAR(100),
+                uploaded_by_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_task_attachments_task_id ON task_attachments (task_id);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_task_attachments_subtask_id ON task_attachments (subtask_id);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_task_attachments_uploaded_by_id ON task_attachments (uploaded_by_id);")
+        )
+        await conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS attendance_records (
+                id UUID PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                date VARCHAR(10) NOT NULL,
+                check_in_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                check_out_time TIMESTAMP WITH TIME ZONE,
+                total_hours FLOAT NOT NULL DEFAULT 0.0,
+                status VARCHAR(50) NOT NULL DEFAULT 'CHECKED_IN',
+                check_in_note VARCHAR(255),
+                check_out_note VARCHAR(255),
+                ip_address VARCHAR(100),
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_attendance_records_user_id ON attendance_records (user_id);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_attendance_records_date ON attendance_records (date);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_attendance_records_status ON attendance_records (status);")
+        )
+        await conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_user_date ON attendance_records (user_id, date);")
+        )
+        await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS today_first_login_at TIMESTAMP WITH TIME ZONE;")
         )
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS today_first_login_date VARCHAR(10);")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_on_leave BOOLEAN DEFAULT FALSE NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS leave_date VARCHAR(10);")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS leave_reason VARCHAR(255);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_users_is_on_leave ON users (is_on_leave);")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSON DEFAULT '{}';")
         )
         await conn.execute(
             text("ALTER TABLE purchase_requests ALTER COLUMN category DROP NOT NULL;")
@@ -74,14 +154,66 @@ async def init_models() -> None:
         await conn.execute(
             text("ALTER TABLE inventory_items ALTER COLUMN vendor DROP NOT NULL;")
         )
+        # Separate inventory per branch
+        await conn.execute(
+            text("ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES branches(id) ON DELETE CASCADE;")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_inventory_items_branch_id ON inventory_items (branch_id);")
+        )
+        await conn.execute(
+            text("DROP INDEX IF EXISTS ix_inventory_items_code;")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_inventory_items_code ON inventory_items (code);")
+        )
+        await conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_items_branch_code ON inventory_items (branch_id, code) WHERE branch_id IS NOT NULL;")
+        )
+        await conn.execute(
+            text("""
+            UPDATE inventory_items 
+            SET branch_id = (SELECT id FROM branches ORDER BY created_at ASC LIMIT 1)
+            WHERE branch_id IS NULL AND EXISTS (SELECT 1 FROM branches);
+            """)
+        )
+        # Drag-and-drop ordering columns
+        await conn.execute(
+            text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS order_index INTEGER DEFAULT 0 NOT NULL;")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_tasks_order_index ON tasks (order_index);")
+        )
+        await conn.execute(
+            text("ALTER TABLE subtasks ADD COLUMN IF NOT EXISTS order_index INTEGER DEFAULT 0 NOT NULL;")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_subtasks_order_index ON subtasks (order_index);")
+        )
+        await conn.execute(
+            text("ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS order_index INTEGER DEFAULT 0 NOT NULL;")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_checklist_items_order_index ON checklist_items (order_index);")
+        )
+        await conn.execute(
+            text("ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS target_user_id UUID REFERENCES users(id) ON DELETE SET NULL;")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_checklist_items_target_user_id ON checklist_items (target_user_id);")
+        )
     logger.info("Database tables verified/created successfully.")
 
 
 async def init_super_admin(session: AsyncSession) -> User:
     """Seed the default Super Admin user if not present"""
-    stmt = select(User).where(User.email == settings.FIRST_SUPER_ADMIN_EMAIL)
+    stmt = (
+        select(User)
+        .where(User.email == settings.FIRST_SUPER_ADMIN_EMAIL)
+        .order_by(User.created_at.asc())
+    )
     result = await session.execute(stmt)
-    user = result.scalar_one_or_none()
+    user = result.scalars().first()
 
     if not user:
         user = User(
@@ -229,8 +361,10 @@ async def init_demo_users(session: AsyncSession) -> None:
     ]
 
     for u_data in demo_users:
-        existing = await session.execute(select(User).where(User.email == u_data["email"]))
-        user = existing.scalar_one_or_none()
+        existing = await session.execute(
+            select(User).where(User.email == u_data["email"]).order_by(User.created_at.asc())
+        )
+        user = existing.scalars().first()
         if not user:
             user = User(
                 email=u_data["email"],
@@ -251,10 +385,10 @@ async def init_demo_users(session: AsyncSession) -> None:
     await session.commit()
 
     # Wire demo hierarchy reporting lines: staff1 -> teamleader -> incharge -> admin
-    admin_u = (await session.execute(select(User).where(User.email == "admin@example.com"))).scalar_one_or_none()
-    incharge_u = (await session.execute(select(User).where(User.email == "incharge@example.com"))).scalar_one_or_none()
-    tl_u = (await session.execute(select(User).where(User.email == "teamleader@example.com"))).scalar_one_or_none()
-    staff1_u = (await session.execute(select(User).where(User.email == "staff1@example.com"))).scalar_one_or_none()
+    admin_u = (await session.execute(select(User).where(User.email == "admin@example.com").order_by(User.created_at.asc()))).scalars().first()
+    incharge_u = (await session.execute(select(User).where(User.email == "incharge@example.com").order_by(User.created_at.asc()))).scalars().first()
+    tl_u = (await session.execute(select(User).where(User.email == "teamleader@example.com").order_by(User.created_at.asc()))).scalars().first()
+    staff1_u = (await session.execute(select(User).where(User.email == "staff1@example.com").order_by(User.created_at.asc()))).scalars().first()
 
     if admin_u and incharge_u:
         incharge_u.reports_to_id = admin_u.id
@@ -265,4 +399,74 @@ async def init_demo_users(session: AsyncSession) -> None:
 
     await session.commit()
     logger.info("Demo hierarchy accounts verified/seeded successfully.")
+
+
+async def init_warranty_defaults(session: AsyncSession) -> None:
+    """Seed initial lookup data for warranty service types, brands, models, and staff if empty"""
+    from app.models.warranty import (
+        WarrantyBrand,
+        WarrantyModel,
+        WarrantyServiceType,
+        WarrantyStaff,
+    )
+
+    # 1. Service Types
+    existing_types = (await session.execute(select(WarrantyServiceType))).scalars().first()
+    if not existing_types:
+        sample_types = [
+            ("Warranty Repair", "Standard repair under manufacturer warranty"),
+            ("Screen Replacement", "Display and touch panel replacement"),
+            ("Hardware Diagnostic", "Full diagnostics and failure analysis"),
+            ("Battery Replacement", "Battery test, recalibration or swap"),
+            ("Software Flash / OS", "OS reinstall, firmware flash, recovery"),
+            ("Motherboard Service", "Chip-level circuit repair and component replacement"),
+            ("General Inspection", "Checkup and preventative servicing"),
+        ]
+        for name, desc in sample_types:
+            session.add(WarrantyServiceType(name=name, description=desc))
+
+    # 2. Brands & Models
+    existing_brands = (await session.execute(select(WarrantyBrand))).scalars().first()
+    if not existing_brands:
+        brand_models = {
+            "Apple": ["iPhone 15", "iPhone 14", "MacBook Pro M3", "iPad Air 5"],
+            "Samsung": ["Galaxy S24 Ultra", "Galaxy S23", "Galaxy Tab S9", "Galaxy A54"],
+            "Dell": ["XPS 15", "Latitude 5420", "Inspiron 16", "Alienware m16"],
+            "HP": ["Pavilion 15", "Spectre x360", "EliteBook 840", "Omen 16"],
+            "Lenovo": ["ThinkPad T14", "IdeaPad Slim 5", "Legion Pro 5"],
+            "Asus": ["ROG Zephyrus G14", "ZenBook 14 OLED", "TUF Gaming A15"],
+            "Sony": ["Bravia 55 4K", "PlayStation 5", "WH-1000XM5"],
+        }
+        for b_name, models in brand_models.items():
+            brand = WarrantyBrand(name=b_name)
+            session.add(brand)
+            await session.flush()
+            for m_name in models:
+                session.add(WarrantyModel(name=m_name, brand_id=brand.id))
+
+    # 3. Staff
+    existing_staff = (await session.execute(select(WarrantyStaff))).scalars().first()
+    if not existing_staff:
+        sample_staff = [
+            {
+                "name": "Alex Tech (Senior Tech)",
+                "phone": "+91 98765 43210",
+                "email": "alex.tech@example.com",
+            },
+            {
+                "name": "Rohan Sharma (Service Engineer)",
+                "phone": "+91 98765 12345",
+                "email": "rohan.s@example.com",
+            },
+            {
+                "name": "Priya Nair (Warranty Specialist)",
+                "phone": "+91 98765 67890",
+                "email": "priya.n@example.com",
+            },
+        ]
+        for s in sample_staff:
+            session.add(WarrantyStaff(**s))
+
+    await session.commit()
+    logger.info("Warranty defaults verified/seeded successfully.")
 

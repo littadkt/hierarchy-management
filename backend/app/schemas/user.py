@@ -38,9 +38,12 @@ class UserUpdate(BaseModel):
     can_place_wholesale_orders: Optional[bool] = None
     branch: Optional[str] = None
     department: Optional[str] = None
+    is_on_leave: Optional[bool] = None
+    leave_date: Optional[str] = None
+    leave_reason: Optional[str] = None
+    permissions: Optional[dict] = None
 
     @field_validator("password")
-    @classmethod
     def validate_password(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             if len(v) < 8:
@@ -48,6 +51,23 @@ class UserUpdate(BaseModel):
             if not any(c.isalpha() for c in v) or not any(c.isdigit() for c in v):
                 raise ValueError("Password must contain at least one letter and one number")
         return v
+
+
+class UserLeaveUpdate(BaseModel):
+    is_on_leave: bool
+    leave_date: Optional[str] = None
+    leave_reason: Optional[str] = None
+
+
+class WindowPermission(BaseModel):
+    add: bool = False
+    display: bool = False
+    edit: bool = False
+    delete: bool = False
+
+
+class UserPermissionsUpdate(BaseModel):
+    permissions: dict[str, WindowPermission]
 
 
 class UserBrief(BaseModel):
@@ -62,6 +82,10 @@ class UserBrief(BaseModel):
     reports_to_id: Optional[uuid.UUID] = None
     last_login_at: Optional[datetime] = None
     today_first_login_at: Optional[datetime] = None
+    is_on_leave: bool = False
+    leave_date: Optional[str] = None
+    leave_reason: Optional[str] = None
+    permissions: Optional[dict] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -79,6 +103,10 @@ class UserOut(UserBase):
     updated_at: datetime
     last_login_at: Optional[datetime] = None
     today_first_login_at: Optional[datetime] = None
+    is_on_leave: bool = False
+    leave_date: Optional[str] = None
+    leave_reason: Optional[str] = None
+    permissions: Optional[dict] = None
 
     model_config = ConfigDict(from_attributes=True)
 

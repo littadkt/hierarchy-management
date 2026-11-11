@@ -18,8 +18,10 @@ import {
   ArrowRight,
   ChevronDown,
   ChevronUp,
+  GripVertical,
+  User as UserIcon,
 } from "lucide-react";
-import { ChecklistItem } from "@/lib/types";
+import { ChecklistItem, UserBrief } from "@/lib/types";
 import { checklistApi, getErrorMessage } from "@/lib/api";
 import { useConfirm } from "@/context/ConfirmContext";
 
@@ -41,21 +43,75 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Selectable users
+  const [users, setUsers] = useState<UserBrief[]>([]);
+
   // New item form state
   const [newTitle, setNewTitle] = useState("");
   const [newDueDate, setNewDueDate] = useState("");
+  const [newTargetUserId, setNewTargetUserId] = useState("");
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showUserPicker, setShowUserPicker] = useState(false);
 
   // Edit item state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
+  const [editTargetUserId, setEditTargetUserId] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Drag and drop reordering state
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", index.toString());
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === targetIndex) {
+      setDraggedIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+
+    const previous = [...items];
+    const reordered = [...items];
+    const [moved] = reordered.splice(draggedIndex, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    setItems(reordered);
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+
+    try {
+      await checklistApi.reorder(reordered.map((i) => i.id));
+    } catch (err) {
+      console.error("Failed to reorder checklist items:", err);
+      setItems(previous);
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
 
   const loadItems = async () => {
     try {
@@ -70,8 +126,18 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
     }
   };
 
+  const loadUsers = async () => {
+    try {
+      const data = await checklistApi.getUsers();
+      setUsers(data);
+    } catch (err) {
+      console.error("Failed to load selectable users:", err);
+    }
+  };
+
   useEffect(() => {
     loadItems();
+    loadUsers();
   }, []);
 
   const totalCount = items.length;
@@ -90,11 +156,14 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
       const created = await checklistApi.create({
         title: newTitle.trim(),
         due_date: newDueDate ? new Date(newDueDate).toISOString() : null,
+        target_user_id: newTargetUserId || null,
       });
       setItems([created, ...items]);
       setNewTitle("");
       setNewDueDate("");
+      setNewTargetUserId("");
       setShowDatePicker(false);
+      setShowUserPicker(false);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -124,6 +193,7 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
     setEditingId(item.id);
     setEditTitle(item.title);
     setEditDueDate(item.due_date ? new Date(item.due_date).toISOString().slice(0, 10) : "");
+    setEditTargetUserId(item.target_user_id || "");
   };
 
   // Save Edit
@@ -135,6 +205,7 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
       const updated = await checklistApi.update(itemId, {
         title: editTitle.trim(),
         due_date: editDueDate ? new Date(editDueDate).toISOString() : null,
+        target_user_id: editTargetUserId || null,
       });
       setItems(items.map((i) => (i.id === itemId ? updated : i)));
       setEditingId(null);
@@ -215,7 +286,7 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
           <div className="flex items-center gap-3 shrink-0">
             <Link
               href="/checklist"
-              className="hidden sm:inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 hover:underline px-2.5 py-1 rounded-lg bg-indigo-50/50 dark:bg-indigo-950/40"
+              className="hidden sm:inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:underline px-2.5 py-1 rounded-lg bg-indigo-50/50 dark:bg-indigo-950/40"
             >
               <span>Full Page</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -251,7 +322,7 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
             type="button"
             onClick={() => setShowDatePicker(!showDatePicker)}
             title="Set due date"
-            className={`p-2 rounded-xl text-xs transition ${
+            className={`p-2 rounded-xl text-xs transition cursor-pointer ${
               newDueDate || showDatePicker
                 ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300"
                 : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-700"
@@ -261,33 +332,90 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
           </button>
 
           <button
+            type="button"
+            onClick={() => setShowUserPicker(!showUserPicker)}
+            title="Select user for this checklist item (optional)"
+            className={`p-2 rounded-xl text-xs transition flex items-center gap-1 cursor-pointer ${
+              newTargetUserId || showUserPicker
+                ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300"
+                : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-700"
+            }`}
+          >
+            <UserIcon className="w-4 h-4" />
+            {newTargetUserId && (
+              <span className="max-w-[70px] truncate text-[10px] font-semibold hidden sm:inline">
+                {users.find((u) => u.id === newTargetUserId)?.full_name.split(" ")[0]}
+              </span>
+            )}
+          </button>
+
+          <button
             type="submit"
             disabled={submitting || !newTitle.trim()}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-xs transition disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer"
           >
             {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-4 h-4" />}
             <span className="hidden sm:inline">Add</span>
           </button>
         </div>
 
-        {/* Due Date Input Reveal */}
-        {showDatePicker && (
-          <div className="flex items-center gap-2 px-2 text-xs animate-in fade-in duration-150">
-            <span className="text-slate-400 text-[11px]">Due Date:</span>
-            <input
-              type="date"
-              value={newDueDate}
-              onChange={(e) => setNewDueDate(e.target.value)}
-              className="px-2.5 py-1 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 outline-none"
-            />
-            {newDueDate && (
-              <button
-                type="button"
-                onClick={() => setNewDueDate("")}
-                className="text-slate-400 hover:text-rose-500 text-xs"
-              >
-                Clear date
-              </button>
+        {/* Due Date & Select User Option Reveal */}
+        {(showDatePicker || showUserPicker || newDueDate || newTargetUserId) && (
+          <div className="flex items-center gap-3 px-2 text-xs animate-in fade-in duration-150 flex-wrap pt-1">
+            {/* Due Date */}
+            {(showDatePicker || newDueDate) && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 text-[11px] flex items-center gap-1">
+                  <Calendar className="w-3 h-3" />
+                  Due Date:
+                </span>
+                <input
+                  type="date"
+                  value={newDueDate}
+                  onChange={(e) => setNewDueDate(e.target.value)}
+                  className="px-2.5 py-1 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 outline-none"
+                />
+                {newDueDate && (
+                  <button
+                    type="button"
+                    onClick={() => setNewDueDate("")}
+                    className="text-slate-400 hover:text-rose-500 text-xs cursor-pointer"
+                  >
+                    Clear date
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Select User Option */}
+            {(showUserPicker || newTargetUserId) && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 dark:text-slate-400 text-[11px] flex items-center gap-1 font-medium">
+                  <UserIcon className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Select User:</span>
+                </span>
+                <select
+                  value={newTargetUserId}
+                  onChange={(e) => setNewTargetUserId(e.target.value)}
+                  className="px-2.5 py-1 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 outline-none max-w-xs cursor-pointer"
+                >
+                  <option value="">No user selected (None)</option>
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.full_name} ({u.role.replace("_", " ")}{u.branch ? ` - ${u.branch}` : ""})
+                    </option>
+                  ))}
+                </select>
+                {newTargetUserId && (
+                  <button
+                    type="button"
+                    onClick={() => setNewTargetUserId("")}
+                    className="text-slate-400 hover:text-rose-500 text-xs cursor-pointer"
+                  >
+                    Clear user
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -349,7 +477,7 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
             <p className="text-[11px]">Type in the box above to add your own quick tasks.</p>
           </div>
         ) : (
-          displayedItems.map((item) => {
+          displayedItems.map((item, index) => {
             const isEditing = editingId === item.id;
 
             if (isEditing) {
@@ -365,18 +493,38 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
                     className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     autoFocus
                   />
-                  <div className="flex items-center justify-between gap-2">
-                    <input
-                      type="date"
-                      value={editDueDate}
-                      onChange={(e) => setEditDueDate(e.target.value)}
-                      className="px-2.5 py-1 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 outline-none"
-                    />
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                        <input
+                          type="date"
+                          value={editDueDate}
+                          onChange={(e) => setEditDueDate(e.target.value)}
+                          className="px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 outline-none"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <UserIcon className="w-3.5 h-3.5 text-indigo-500" />
+                        <select
+                          value={editTargetUserId}
+                          onChange={(e) => setEditTargetUserId(e.target.value)}
+                          className="px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 outline-none max-w-xs cursor-pointer"
+                        >
+                          <option value="">No user selected (None)</option>
+                          {users.map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.full_name} ({u.role.replace("_", " ")})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => setEditingId(null)}
-                        className="px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg"
+                        className="px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg cursor-pointer"
                       >
                         Cancel
                       </button>
@@ -384,7 +532,7 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
                         type="button"
                         onClick={() => handleSaveEdit(item.id)}
                         disabled={savingEdit || !editTitle.trim()}
-                        className="px-3 py-1 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition"
+                        className="px-3 py-1 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition cursor-pointer"
                       >
                         {savingEdit ? "Saving..." : "Save"}
                       </button>
@@ -397,14 +545,35 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
             return (
               <div
                 key={item.id}
-                className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 group ${
+                draggable
+                onDragStart={(e) => handleDragStart(e, index)}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onDrop={(e) => handleDrop(e, index)}
+                onDragEnd={handleDragEnd}
+                className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-2.5 group ${
                   item.is_completed
                     ? "bg-slate-50/60 dark:bg-slate-800/20 border-slate-200/60 dark:border-slate-800/60"
                     : "bg-white dark:bg-slate-800/60 border-slate-200 dark:border-slate-800 shadow-xs hover:border-slate-300"
+                } ${
+                  draggedIndex === index
+                    ? "opacity-35 border-dashed border-indigo-400 bg-indigo-50/40"
+                    : ""
+                } ${
+                  dragOverIndex === index && draggedIndex !== index
+                    ? "border-t-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50/20 dark:bg-indigo-950/20"
+                    : ""
                 }`}
               >
+                {/* Drag Handle */}
+                <div
+                  className="text-slate-300 dark:text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-grab active:cursor-grabbing shrink-0"
+                  title="Drag ⠿ to rearrange order"
+                >
+                  <GripVertical className="w-3.5 h-3.5" />
+                </div>
+
                 {/* Left: Checkbox & Title */}
-                <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="flex items-center gap-2.5 flex-1 min-w-0">
                   <button
                     type="button"
                     onClick={() => handleToggle(item)}
@@ -431,12 +600,27 @@ export const QuickChecklistWidget: React.FC<QuickChecklistWidgetProps> = ({
                       {item.title}
                     </p>
 
-                    {item.due_date && (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-slate-400 mt-0.5">
-                        <Calendar className="w-2.5 h-2.5" />
-                        {new Date(item.due_date).toLocaleDateString()}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap mt-1">
+                      {item.target_user && (
+                        <span
+                          title={`Selected User: ${item.target_user.full_name} (${item.target_user.role.replace("_", " ")})`}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800"
+                        >
+                          <UserIcon className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
+                          <span>{item.target_user.full_name}</span>
+                          <span className="text-[9px] text-slate-400 font-normal">
+                            ({item.target_user.role.replace("_", " ")})
+                          </span>
+                        </span>
+                      )}
+
+                      {item.due_date && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-slate-400">
+                          <Calendar className="w-2.5 h-2.5" />
+                          {new Date(item.due_date).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 

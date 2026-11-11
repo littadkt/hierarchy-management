@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   Scan,
   UserCheck,
@@ -18,6 +18,10 @@ import {
   Camera,
   Edit,
   Trash2,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Users,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useConfirm } from "@/context/ConfirmContext";
@@ -33,16 +37,21 @@ import { PurchaseHistoryModal } from "@/components/PurchaseHistoryModal";
 import { EditPurchaseRequestModal } from "@/components/EditPurchaseRequestModal";
 
 export default function PurchasesPage() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const { confirm, alert } = useConfirm();
   const [requests, setRequests] = useState<PurchaseRequest[]>([]);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Status Filter & Search
+  // Status Filter, Search, and User Sorting
+  type SortField = "user" | "date" | "total" | "product";
+  type SortOrder = "asc" | "desc";
+
   const [statusFilter, setStatusFilter] = useState<PurchaseRequestStatus | "ALL">("ALL");
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<SortField>("date");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
 
   // Modals state
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
@@ -50,6 +59,15 @@ export default function PurchasesPage() {
   const [statusModalRequest, setStatusModalRequest] = useState<PurchaseRequest | null>(null);
   const [historyModalRequest, setHistoryModalRequest] = useState<PurchaseRequest | null>(null);
   const [editModalRequest, setEditModalRequest] = useState<PurchaseRequest | null>(null);
+
+  const handleSortToggle = (field: SortField) => {
+    if (sortBy === field) {
+      setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(field);
+      setSortOrder(field === "user" ? "asc" : "desc");
+    }
+  };
 
   const canModifyRequest = (r: PurchaseRequest) => {
     if (!user) return false;
@@ -85,6 +103,8 @@ export default function PurchasesPage() {
       const filters = {
         status: statusFilter === "ALL" ? undefined : statusFilter,
         search: search.trim() || undefined,
+        sort_by: sortBy,
+        order: sortOrder,
       };
 
       const reqData = await purchaseApi.listRequests(filters);
@@ -102,7 +122,33 @@ export default function PurchasesPage() {
     if (user) {
       loadData();
     }
-  }, [user, statusFilter]);
+  }, [user, statusFilter, sortBy, sortOrder]);
+
+  // Instant client-side sorting
+  const sortedRequests = useMemo(() => {
+    const list = [...requests];
+    list.sort((a, b) => {
+      let comparison = 0;
+      if (sortBy === "user") {
+        const nameA = a.requested_by?.full_name || "";
+        const nameB = b.requested_by?.full_name || "";
+        comparison = nameA.localeCompare(nameB);
+      } else if (sortBy === "total") {
+        const totalA = (a.rate || 0) * (a.quantity || 0);
+        const totalB = (b.rate || 0) * (b.quantity || 0);
+        comparison = totalA - totalB;
+      } else if (sortBy === "product") {
+        comparison = (a.name || "").localeCompare(b.name || "");
+      } else {
+        // "date" (created_at)
+        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        comparison = dateA - dateB;
+      }
+      return sortOrder === "asc" ? comparison : -comparison;
+    });
+    return list;
+  }, [requests, sortBy, sortOrder]);
 
   useRealtimeEvent(
     [
@@ -198,29 +244,31 @@ export default function PurchasesPage() {
             </p>
           </div>
 
-          {/* Provision for ALL user types: Scan & Submit Request */}
-          <div className="flex items-center gap-2.5 flex-wrap self-start sm:self-auto">
-            <button
-              onClick={() => {
-                setIsCameraAutoOpen(true);
-                setIsScanModalOpen(true);
-              }}
-              className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs shadow-md shadow-purple-600/20 flex items-center gap-2 transition-all"
-            >
-              <Camera className="w-4 h-4" />
-              <span>Scan with Camera</span>
-            </button>
-            <button
-              onClick={() => {
-                setIsCameraAutoOpen(false);
-                setIsScanModalOpen(true);
-              }}
-              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 transition-all"
-            >
-              <Scan className="w-4 h-4" />
-              <span>Enter / Scan Code</span>
-            </button>
-          </div>
+          {/* Provision for users: Scan & Submit Request */}
+          {hasPermission("purchases", "add") && (
+            <div className="flex items-center gap-2.5 flex-wrap self-start sm:self-auto">
+              <button
+                onClick={() => {
+                  setIsCameraAutoOpen(true);
+                  setIsScanModalOpen(true);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs shadow-md shadow-purple-600/20 flex items-center gap-2 transition-all"
+              >
+                <Camera className="w-4 h-4" />
+                <span>Scan with Camera</span>
+              </button>
+              <button
+                onClick={() => {
+                  setIsCameraAutoOpen(false);
+                  setIsScanModalOpen(true);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 transition-all"
+              >
+                <Scan className="w-4 h-4" />
+                <span>Enter / Scan Code</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Global Error Banner */}
@@ -252,25 +300,66 @@ export default function PurchasesPage() {
               ))}
             </div>
 
-            {/* Search Input */}
-            <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 w-full md:w-auto">
-              <div className="relative flex-1 sm:flex-initial">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search code, product, vendor..."
-                  className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden w-full sm:w-64"
-                />
+            {/* Search & Sort Controls */}
+            <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+              <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 flex-1 sm:flex-initial">
+                <div className="relative flex-1 sm:flex-initial">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search code, product, vendor..."
+                    className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden w-full sm:w-56"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Search
+                </button>
+              </form>
+
+              {/* Sort By Dropdown (User Sorting) */}
+              <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/80 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+                <Users className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider hidden sm:inline">
+                  Sort:
+                </span>
+                <select
+                  value={`${sortBy}_${sortOrder}`}
+                  onChange={(e) => {
+                    const [field, order] = e.target.value.split("_") as [SortField, SortOrder];
+                    setSortBy(field);
+                    setSortOrder(order);
+                  }}
+                  className="bg-transparent text-slate-700 dark:text-slate-200 font-medium text-xs focus:outline-none cursor-pointer pr-1"
+                >
+                  <option value="user_asc">User (A → Z)</option>
+                  <option value="user_desc">User (Z → A)</option>
+                  <option value="date_desc">Date (Newest first)</option>
+                  <option value="date_asc">Date (Oldest first)</option>
+                  <option value="total_desc">Total Value (Highest)</option>
+                  <option value="total_asc">Total Value (Lowest)</option>
+                  <option value="product_asc">Product (A → Z)</option>
+                </select>
               </div>
+
+              {/* Sort Direction Toggle Button */}
               <button
-                type="submit"
-                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors"
+                type="button"
+                onClick={() => setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))}
+                title={sortOrder === "asc" ? "Sort Ascending (Click to switch to Descending)" : "Sort Descending (Click to switch to Ascending)"}
+                className="p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition text-slate-600 dark:text-slate-300 cursor-pointer"
               >
-                Search
+                {sortOrder === "asc" ? (
+                  <ArrowUp className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                ) : (
+                  <ArrowDown className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                )}
               </button>
-            </form>
+            </div>
           </div>
 
           {/* Table Data */}
@@ -282,8 +371,42 @@ export default function PurchasesPage() {
                   <th className="px-5 py-3.5">Product Details</th>
                   <th className="px-5 py-3.5">Brand & Vendor</th>
                   <th className="px-5 py-3.5">Qty × Unit Rate</th>
-                  <th className="px-5 py-3.5">Total Value</th>
-                  <th className="px-5 py-3.5">Requested By</th>
+                  <th
+                    className="px-5 py-3.5 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors group select-none"
+                    onClick={() => handleSortToggle("total")}
+                    title="Click to sort by Total Value"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span>Total Value</span>
+                      {sortBy === "total" ? (
+                        sortOrder === "asc" ? (
+                          <ArrowUp className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        ) : (
+                          <ArrowDown className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 opacity-50 group-hover:opacity-100" />
+                      )}
+                    </div>
+                  </th>
+                  <th
+                    className="px-5 py-3.5 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors group select-none"
+                    onClick={() => handleSortToggle("user")}
+                    title="Click to sort by User"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span>Requested By (User)</span>
+                      {sortBy === "user" ? (
+                        sortOrder === "asc" ? (
+                          <ArrowUp className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        ) : (
+                          <ArrowDown className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 opacity-50 group-hover:opacity-100" />
+                      )}
+                    </div>
+                  </th>
                   <th className="px-5 py-3.5">Managed By / PM</th>
                   <th className="px-5 py-3.5">Status</th>
                   <th className="px-5 py-3.5 text-right">Actions</th>
@@ -296,14 +419,14 @@ export default function PurchasesPage() {
                       Loading purchase requests...
                     </td>
                   </tr>
-                ) : requests.length === 0 ? (
+                ) : sortedRequests.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="px-5 py-12 text-center text-slate-400">
                       No purchase requests found matching current filter.
                     </td>
                   </tr>
                 ) : (
-                  requests.map((r) => {
+                  sortedRequests.map((r) => {
                     const totalVal = r.rate * r.quantity;
                     const canEdit = canUpdateStatus(r);
                     const canHist = canViewHistory(r);
@@ -343,12 +466,18 @@ export default function PurchasesPage() {
                           ₹{totalVal.toLocaleString()}
                         </td>
                         <td className="px-5 py-3.5">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-semibold text-slate-700 dark:text-slate-300">
                               {r.requested_by?.full_name || "Unknown"}
                             </span>
                             {r.requested_by?.role && <RoleBadge role={r.requested_by.role} />}
                           </div>
+                          {r.requested_by?.branch && (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-slate-400 mt-0.5">
+                              <Building className="w-2.5 h-2.5 text-indigo-500" />
+                              <span>{r.requested_by.branch}</span>
+                            </span>
+                          )}
                         </td>
                         <td className="px-5 py-3.5">
                           {r.requested_by?.role === "STAFF" ? (
@@ -381,21 +510,25 @@ export default function PurchasesPage() {
                           {/* Edit & Delete (Super Admin, Admin, PM, or Requester if OPEN) */}
                           {canModifyRequest(r) && (
                             <>
-                              <button
-                                onClick={() => setEditModalRequest(r)}
-                                title="Edit request"
-                                className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors inline-flex items-center gap-1"
-                              >
-                                <Edit className="w-3.5 h-3.5" />
-                                <span>Edit</span>
-                              </button>
-                              <button
-                                onClick={() => handleDeleteRequest(r)}
-                                title="Delete request"
-                                className="px-2 py-1 text-xs font-semibold rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors inline-flex items-center gap-1"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {hasPermission("purchases", "edit") && (
+                                <button
+                                  onClick={() => setEditModalRequest(r)}
+                                  title="Edit request"
+                                  className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors inline-flex items-center gap-1"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                  <span>Edit</span>
+                                </button>
+                              )}
+                              {hasPermission("purchases", "delete") && (
+                                <button
+                                  onClick={() => handleDeleteRequest(r)}
+                                  title="Delete request"
+                                  className="px-2 py-1 text-xs font-semibold rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors inline-flex items-center gap-1"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </>
                           )}
 

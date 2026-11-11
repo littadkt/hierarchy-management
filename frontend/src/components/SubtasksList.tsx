@@ -17,11 +17,14 @@ import {
   Loader2,
   CheckSquare,
   Repeat,
+  Paperclip,
+  GripVertical,
 } from "lucide-react";
 import { Subtask, UserBrief } from "@/lib/types";
-import { tasksApi, usersApi, getErrorMessage } from "@/lib/api";
+import { tasksApi, attachmentsApi, usersApi, getErrorMessage } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useConfirm } from "@/context/ConfirmContext";
+import { TaskAttachmentsView } from "./TaskAttachmentsView";
 
 interface SubtasksListProps {
   taskId: string;
@@ -51,8 +54,12 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
   const [newDueDate, setNewDueDate] = useState("");
   const [newAssigneeId, setNewAssigneeId] = useState("");
   const [showAddDetails, setShowAddDetails] = useState(false);
+  const [newFiles, setNewFiles] = useState<File[]>([]);
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+
+  // Expanded subtask attachments tracker
+  const [expandedAttachmentsSubtaskId, setExpandedAttachmentsSubtaskId] = useState<string | null>(null);
 
   // Edit subtask state
   const [editingSubtaskId, setEditingSubtaskId] = useState<string | null>(null);
@@ -66,6 +73,95 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
   // Toggling state tracker
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Drag and drop subtask reordering state
+  const [localSubtasks, setLocalSubtasks] = useState<Subtask[]>(subtasks);
+  const [draggedSubtaskIndex, setDraggedSubtaskIndex] = useState<number | null>(null);
+  const [dragOverSubtaskIndex, setDragOverSubtaskIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setLocalSubtasks(subtasks);
+  }, [subtasks]);
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedSubtaskIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", index.toString());
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverSubtaskIndex !== index) {
+      setDragOverSubtaskIndex(index);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (draggedSubtaskIndex === null || draggedSubtaskIndex === targetIndex) {
+      setDraggedSubtaskIndex(null);
+      setDragOverSubtaskIndex(null);
+      return;
+    }
+
+    const previous = [...localSubtasks];
+    const reordered = [...localSubtasks];
+    const [moved] = reordered.splice(draggedSubtaskIndex, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    setLocalSubtasks(reordered);
+    setDraggedSubtaskIndex(null);
+    setDragOverSubtaskIndex(null);
+
+    try {
+      await tasksApi.reorderSubtasks(
+        taskId,
+        reordered.map((s) => s.id)
+      );
+      onSubtasksChanged();
+    } catch (err) {
+      console.error("Failed to reorder subtasks:", err);
+      setLocalSubtasks(previous);
+      await alert({
+        title: "Reorder Failed",
+        message: getErrorMessage(err),
+        type: "error",
+      });
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggedSubtaskIndex(null);
+    setDragOverSubtaskIndex(null);
+  };
+
+  const handleMoveSubtask = async (currentIndex: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= localSubtasks.length) return;
+
+    const previous = [...localSubtasks];
+    const reordered = [...localSubtasks];
+    const [moved] = reordered.splice(currentIndex, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    setLocalSubtasks(reordered);
+    try {
+      await tasksApi.reorderSubtasks(
+        taskId,
+        reordered.map((s) => s.id)
+      );
+      onSubtasksChanged();
+    } catch (err) {
+      console.error("Failed to move subtask:", err);
+      setLocalSubtasks(previous);
+      await alert({
+        title: "Reorder Failed",
+        message: getErrorMessage(err),
+        type: "error",
+      });
+    }
+  };
 
   useEffect(() => {
     const loadUsers = async () => {
@@ -115,16 +211,29 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
     setSubmittingAdd(true);
     setAddError(null);
     try {
-      await tasksApi.createSubtask(taskId, {
+      const created = await tasksApi.createSubtask(taskId, {
         title: newTitle.trim(),
         description: newDescription.trim() || null,
         due_date: newDueDate ? new Date(newDueDate).toISOString() : null,
         assigned_to_id: newAssigneeId || null,
       });
+
+      if (newFiles.length > 0 && created?.id) {
+        try {
+          const uploader = attachmentsApi?.upload || tasksApi?.uploadAttachments;
+          if (uploader) {
+            await uploader(taskId, newFiles, created.id);
+          }
+        } catch (uploadErr) {
+          console.error("Failed to upload subtask attachments:", uploadErr);
+        }
+      }
+
       setNewTitle("");
       setNewDescription("");
       setNewDueDate("");
       setNewAssigneeId("");
+      setNewFiles([]);
       setShowAddDetails(false);
       setIsAdding(false);
       onSubtasksChanged();
@@ -203,6 +312,11 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">
               Subtasks Checklist ({completedCount}/{totalCount})
             </h4>
+            {totalCount > 1 && (
+              <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">
+                • Drag ⠿ or click arrows to reorder
+              </span>
+            )}
           </div>
           <span className="text-xs font-bold text-slate-600 dark:text-slate-300">
             {percentCompleted}%
@@ -249,7 +363,7 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
             )}
           </div>
         ) : (
-          subtasks.map((subtask) => {
+          localSubtasks.map((subtask, index) => {
             const isEditing = editingSubtaskId === subtask.id;
 
             if (isEditing) {
@@ -348,16 +462,72 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
             }
 
             return (
-              <div
-                key={subtask.id}
-                className={`p-3 rounded-xl border transition-all flex items-start justify-between gap-3 group ${
-                  subtask.is_completed
-                    ? "bg-slate-50/70 dark:bg-slate-800/30 border-slate-200 dark:border-slate-800"
-                    : "bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 shadow-xs"
-                }`}
-              >
+              <React.Fragment key={subtask.id}>
+                <div
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, index)}
+                  onDragOver={(e) => handleDragOver(e, index)}
+                  onDrop={(e) => handleDrop(e, index)}
+                  onDragEnd={handleDragEnd}
+                  className={`p-3 rounded-xl border transition-all flex items-start justify-between gap-2.5 group ${
+                    subtask.is_completed
+                      ? "bg-slate-50/70 dark:bg-slate-800/30 border-slate-200 dark:border-slate-800"
+                      : "bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 shadow-xs"
+                  } ${
+                    draggedSubtaskIndex === index
+                      ? "opacity-35 border-dashed border-indigo-400 bg-indigo-50/50"
+                      : ""
+                  } ${
+                    dragOverSubtaskIndex === index && draggedSubtaskIndex !== index
+                      ? "border-t-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50/30 dark:bg-indigo-950/20"
+                      : ""
+                  }`}
+                >
+                {/* Drag Handle & Up/Down Arrows */}
+                <div className="flex flex-col items-center gap-0.5 shrink-0 pt-0.5 select-none">
+                  <div
+                    draggable
+                    onDragStart={(e) => {
+                      e.stopPropagation();
+                      handleDragStart(e, index);
+                    }}
+                    className="p-0.5 text-slate-300 dark:text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-grab active:cursor-grabbing"
+                    title="Drag ⠿ to rearrange subtask order"
+                  >
+                    <GripVertical className="w-3.5 h-3.5" />
+                  </div>
+                  {localSubtasks.length > 1 && (
+                    <div className="flex flex-col -space-y-1">
+                      <button
+                        type="button"
+                        disabled={index === 0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMoveSubtask(index, "up");
+                        }}
+                        title="Move subtask up"
+                        className="text-slate-300 hover:text-indigo-600 dark:text-slate-600 dark:hover:text-indigo-400 disabled:opacity-20 disabled:hover:text-slate-300 p-0.5 transition"
+                      >
+                        <ChevronUp className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={index === localSubtasks.length - 1}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMoveSubtask(index, "down");
+                        }}
+                        title="Move subtask down"
+                        className="text-slate-300 hover:text-indigo-600 dark:text-slate-600 dark:hover:text-indigo-400 disabled:opacity-20 disabled:hover:text-slate-300 p-0.5 transition"
+                      >
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Left: Checkbox & Subtask Title/Details */}
-                <div className="flex items-start gap-3 flex-1 min-w-0">
+                <div className="flex items-start gap-2.5 flex-1 min-w-0">
                   <button
                     type="button"
                     onClick={() => handleToggle(subtask)}
@@ -404,6 +574,30 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
                           {subtask.assigned_to.full_name}
                         </span>
                       )}
+                      {/* Subtask Attachments Indicator Button */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedAttachmentsSubtaskId(
+                            expandedAttachmentsSubtaskId === subtask.id ? null : subtask.id
+                          )
+                        }
+                        title="Toggle subtask file attachments"
+                        className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-semibold transition ${
+                          (subtask.attachments?.length || 0) > 0
+                            ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 hover:bg-indigo-100"
+                            : "bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300"
+                        }`}
+                      >
+                        <Paperclip className="w-2.5 h-2.5" />
+                        <span>
+                          {(subtask.attachments?.length || 0) > 0
+                            ? `${subtask.attachments?.length} ${
+                                subtask.attachments?.length === 1 ? "file" : "files"
+                              }`
+                            : "Attach"}
+                        </span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -437,6 +631,23 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* Subtask Attachments Drawer */}
+              {expandedAttachmentsSubtaskId === subtask.id && (
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-indigo-200 dark:border-indigo-900 mt-1 mb-2 space-y-2 animate-in fade-in duration-150">
+                  <TaskAttachmentsView
+                    taskId={taskId}
+                    subtaskId={subtask.id}
+                    subtaskTitle={subtask.title}
+                    attachments={subtask.attachments || []}
+                    onAttachmentsChanged={onSubtasksChanged}
+                    canUpload={canManage}
+                    canDelete={true}
+                    compact={true}
+                  />
+                </div>
+              )}
+            </React.Fragment>
             );
           })
         )}
@@ -449,7 +660,7 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
             <button
               type="button"
               onClick={() => setIsAdding(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/40 rounded-xl transition"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/40 rounded-xl transition"
             >
               <Plus className="w-4 h-4" />
               <span>Add Subtask</span>
@@ -529,6 +740,36 @@ export const SubtasksList: React.FC<SubtasksListProps> = ({
                         ))}
                       </select>
                     </div>
+                  </div>
+
+                  {/* Subtask File Attachments Input */}
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                      Attach Files to Subtask
+                    </label>
+                    <input
+                      type="file"
+                      multiple
+                      onChange={(e) => {
+                        if (e.target.files) {
+                          setNewFiles(Array.from(e.target.files));
+                        }
+                      }}
+                      className="w-full text-xs text-slate-500 file:mr-2.5 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 dark:file:bg-indigo-950 dark:file:text-indigo-300 hover:file:bg-indigo-100"
+                    />
+                    {newFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {newFiles.map((f, i) => (
+                          <span
+                            key={i}
+                            className="inline-flex items-center gap-1 text-[10px] bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-800"
+                          >
+                            <Paperclip className="w-2.5 h-2.5" />
+                            {f.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from typing import TYPE_CHECKING, List, Optional
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,6 +10,7 @@ from app.db.base import Base
 if TYPE_CHECKING:
     from app.models.task import Task
     from app.models.user import User
+    from app.models.attachment import TaskAttachment
 
 
 class Subtask(Base):
@@ -31,6 +32,9 @@ class Subtask(Base):
     )
     due_date: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    order_index: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, index=True
     )
 
     assigned_to_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -66,4 +70,16 @@ class Subtask(Base):
     created_by: Mapped["User"] = relationship(
         "User", foreign_keys=[created_by_id]
     )
+    attachments: Mapped[List["TaskAttachment"]] = relationship(
+        "TaskAttachment",
+        foreign_keys="[TaskAttachment.subtask_id]",
+        back_populates="subtask",
+        cascade="all, delete-orphan",
+        order_by="desc(TaskAttachment.created_at)",
+    )
+
+    @property
+    def attachments_count(self) -> int:
+        return len(self.attachments) if "attachments" in self.__dict__ else 0
+
 

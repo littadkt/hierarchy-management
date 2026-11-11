@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import Role, User
-from app.schemas.user import UserBrief, UserCreate, UserOut, UserUpdate
+from app.schemas.user import UserBrief, UserCreate, UserLeaveUpdate, UserOut, UserUpdate
+from app.services.permission_service import PermissionService
 from app.services.user_service import UserService
 
 router = APIRouter()
@@ -100,6 +101,10 @@ async def list_users(
                 updated_at=u.updated_at,
                 last_login_at=last_login,
                 today_first_login_at=today_login,
+                is_on_leave=u.is_on_leave,
+                leave_date=u.leave_date,
+                leave_reason=u.leave_reason,
+                permissions=PermissionService.get_user_permissions(u),
             )
         )
     return results
@@ -139,6 +144,48 @@ async def get_user(
         updated_at=user.updated_at,
         last_login_at=last_login,
         today_first_login_at=today_login,
+        is_on_leave=user.is_on_leave,
+        leave_date=user.leave_date,
+        leave_reason=user.leave_reason,
+        permissions=PermissionService.get_user_permissions(user),
+    )
+
+
+@router.post("/{user_id}/leave", response_model=UserOut)
+async def set_user_leave(
+    user_id: uuid.UUID,
+    payload: UserLeaveUpdate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Mark or unmark user as on leave.
+    Provision restricted to Admins and Super Admins.
+    """
+    user = await UserService.set_user_leave(session, current_user, user_id, payload)
+    can_see_login = current_user.role in [Role.SUPER_ADMIN, Role.ADMIN] or current_user.id == user.id
+    today_login = UserService.get_effective_today_first_login(user) if can_see_login else None
+    last_login = user.last_login_at if can_see_login else None
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        is_purchase_manager=user.is_purchase_manager,
+        can_place_wholesale_orders=user.can_place_wholesale_orders,
+        branch=user.branch,
+        department=user.department,
+        reports_to_id=user.reports_to_id,
+        created_by_id=user.created_by_id,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        last_login_at=last_login,
+        today_first_login_at=today_login,
+        is_on_leave=user.is_on_leave,
+        leave_date=user.leave_date,
+        leave_reason=user.leave_reason,
+        permissions=PermissionService.get_user_permissions(user),
     )
 
 

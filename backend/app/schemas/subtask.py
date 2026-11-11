@@ -1,8 +1,9 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 import uuid
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.attachment import AttachmentOut
 from app.schemas.user import UserBrief
 
 
@@ -36,6 +37,7 @@ class SubtaskOut(BaseModel):
     description: Optional[str] = None
     is_completed: bool
     due_date: Optional[datetime] = None
+    order_index: int = 0
     assigned_to_id: Optional[uuid.UUID] = None
     created_by_id: uuid.UUID
     created_at: datetime
@@ -43,6 +45,13 @@ class SubtaskOut(BaseModel):
 
     assigned_to: Optional[UserBrief] = None
     created_by: Optional[UserBrief] = None
+    attachments: List[AttachmentOut] = []
+    attachments_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class SubtaskReorderRequest(BaseModel):
+    subtask_ids: List[uuid.UUID]
+
 

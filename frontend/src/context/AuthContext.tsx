@@ -12,6 +12,7 @@ interface AuthContextType {
   login: (email: string, pass: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
+  hasPermission: (windowId: string, action: "add" | "display" | "edit" | "delete") => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -88,8 +89,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     router.push("/login");
   };
 
+  const hasPermission = (
+    windowId: string,
+    action: "add" | "display" | "edit" | "delete"
+  ): boolean => {
+    if (!user) return false;
+    if (user.role === "SUPER_ADMIN") return true;
+
+    // Direct permission override if stored
+    if (user.permissions) {
+      if (user.permissions[windowId]) {
+        return !!user.permissions[windowId][action];
+      }
+      if (windowId.startsWith("warranty_") && user.permissions["warranty"]) {
+        return !!user.permissions["warranty"][action];
+      }
+    }
+
+    // Role defaults when no custom override is saved
+    if (user.role === "ADMIN") {
+      if (windowId === "backup") return false;
+      return true;
+    }
+
+    if (user.role === "IN_CHARGE") {
+      if (windowId === "backup") return false;
+      if (action === "display") return true;
+      if (["tasks", "subtasks", "checklist", "approvals", "warranty", "warranty_jobs", "attendance"].includes(windowId)) return true;
+      return false;
+    }
+
+    if (user.role === "TEAM_LEADER") {
+      if (["backup", "branches", "departments", "wholesale"].includes(windowId)) return false;
+      if (action === "display") return true;
+      if (["tasks", "subtasks", "checklist", "warranty", "warranty_jobs", "attendance"].includes(windowId) && ["add", "edit"].includes(action)) return true;
+      if (windowId === "approvals" && action === "add") return true;
+      return false;
+    }
+
+    if (user.role === "STAFF") {
+      if (["backup", "branches", "departments", "wholesale", "users", "hierarchy", "approvals"].includes(windowId)) return false;
+      if (["dashboard", "tasks", "subtasks", "attendance", "warranty", "warranty_jobs", "checklist", "inventory", "purchases"].includes(windowId) && action === "display") return true;
+      if (windowId === "checklist") return true;
+      if (["tasks", "subtasks"].includes(windowId) && action === "edit") return true;
+      if (["attendance", "warranty", "warranty_jobs"].includes(windowId) && action === "add") return true;
+      return false;
+    }
+
+    return true;
+  };
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, token, loading, login, logout, refreshUser, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );

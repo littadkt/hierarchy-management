@@ -25,14 +25,27 @@ TestSessionLocal = async_sessionmaker(
 
 
 async def override_get_db():
-    async with TestSessionLocal() as session:
+    session = TestSessionLocal()
+    try:
+        yield session
+    except Exception:
         try:
-            yield session
-        except Exception:
             await session.rollback()
-            raise
-        finally:
+        except Exception:
+            try:
+                await session.invalidate()
+            except Exception:
+                pass
+        raise
+    finally:
+        try:
             await session.close()
+        except Exception:
+            try:
+                await session.invalidate()
+                await session.close()
+            except Exception:
+                pass
 
 
 from app.db import session as db_session_module

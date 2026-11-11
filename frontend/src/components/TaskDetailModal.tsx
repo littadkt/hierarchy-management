@@ -16,16 +16,20 @@ import {
   Trash2,
   Edit,
   CheckSquare,
+  Paperclip,
+  Loader2,
+  Users,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
-import { approvalsApi, tasksApi, getErrorMessage } from "@/lib/api";
-import { Subtask, Task, TaskActivity, TaskComment, TaskStatus } from "@/lib/types";
+import { approvalsApi, attachmentsApi, tasksApi, getErrorMessage } from "@/lib/api";
+import { Subtask, Task, TaskActivity, TaskAttachment, TaskComment, TaskStatus } from "@/lib/types";
 import { RoleBadge } from "./RoleBadge";
 import { StatusBadge } from "./StatusBadge";
 import { EditTaskModal } from "./EditTaskModal";
 import { SubtasksList } from "./SubtasksList";
+import { TaskAttachmentsView } from "./TaskAttachmentsView";
 
 interface TaskDetailModalProps {
   taskId: string | null;
@@ -46,32 +50,54 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [activities, setActivities] = useState<TaskActivity[]>([]);
   const [subtasks, setSubtasks] = useState<Subtask[]>([]);
+  const [taskAttachments, setTaskAttachments] = useState<TaskAttachment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [approvalNotes, setApprovalNotes] = useState("");
   const [showApprovalBox, setShowApprovalBox] = useState(false);
   const [actionType, setActionType] = useState<"SUBMIT" | "APPROVE" | "REJECT">("SUBMIT");
   const [isEditTaskOpen, setIsEditTaskOpen] = useState(false);
+  const [subordinateStatus, setSubordinateStatus] = useState<{
+    can_complete_or_submit: boolean;
+    subordinates_count: number;
+    pending_tasks_count: number;
+    pending_tasks: Array<{
+      id: string;
+      title: string;
+      status: string;
+      assigned_to_name: string;
+      assigned_to_role: string;
+    }>;
+  } | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"details" | "subtasks" | "comments" | "history">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "subtasks" | "attachments" | "comments" | "history">("details");
 
   const loadData = async (silent = false) => {
     if (!taskId) return;
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const [taskData, commentsData, activitiesData, subtasksData] = await Promise.all([
-        tasksApi.get(taskId),
+      const taskData = await tasksApi.get(taskId);
+      setTask(taskData);
+      if (taskData.subtasks) setSubtasks(taskData.subtasks);
+      if (taskData.attachments) setTaskAttachments(taskData.attachments);
+
+      // Fetch comments, activities, and fresh subtasks/attachments safely in parallel
+      Promise.allSettled([
         tasksApi.getComments(taskId),
         tasksApi.getActivities(taskId),
         tasksApi.getSubtasks(taskId),
-      ]);
-      setTask(taskData);
-      setComments(commentsData);
-      setActivities(activitiesData);
-      setSubtasks(subtasksData);
+        (attachmentsApi?.list || tasksApi?.getAttachments)?.(taskId),
+        user && user.role !== "STAFF" ? tasksApi.getSubordinateTodayStatus() : Promise.resolve(null),
+      ]).then(([cRes, aRes, sRes, attRes, subRes]) => {
+        if (cRes.status === "fulfilled") setComments(cRes.value);
+        if (aRes.status === "fulfilled") setActivities(aRes.value);
+        if (sRes.status === "fulfilled") setSubtasks(sRes.value);
+        if (attRes.status === "fulfilled" && attRes.value) setTaskAttachments(attRes.value);
+        if (subRes.status === "fulfilled" && subRes.value) setSubordinateStatus(subRes.value);
+      });
     } catch (err) {
       if (!silent) setError(getErrorMessage(err));
     } finally {
@@ -90,14 +116,37 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     }
   };
 
+  const handleAttachmentsChanged = async () => {
+    if (!taskId) return;
+    try {
+      const fetcher = attachmentsApi?.list || tasksApi?.getAttachments;
+      if (fetcher) {
+        const updated = await fetcher(taskId);
+        setTaskAttachments(updated);
+      }
+      onTaskUpdated();
+    } catch (err) {
+      console.error("Failed to refresh attachments", err);
+    }
+  };
+
   useEffect(() => {
     if (isOpen && taskId) {
       loadData();
+    } else if (!isOpen) {
+      setTask(null);
+      setError(null);
     }
   }, [isOpen, taskId]);
 
   useRealtimeEvent(
-    ["TASK_STATUS_UPDATED", "TASK_UPDATED", "APPROVAL_STATUS_UPDATED"],
+    [
+      "TASK_STATUS_UPDATED",
+      "TASK_UPDATED",
+      "APPROVAL_STATUS_UPDATED",
+      "TASK_ATTACHMENT_ADDED",
+      "TASK_ATTACHMENT_DELETED",
+    ],
     (event) => {
       if (isOpen && taskId && event.data?.task_id === taskId) {
         loadData(true);
@@ -105,7 +154,42 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     }
   );
 
-  if (!isOpen || !task) return null;
+  if (!isOpen) return null;
+
+  if (!task) {
+    return (
+      <div className="fixed inset-0 z-50 overflow-y-auto">
+        <div
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
+          onClick={onClose}
+        />
+        <div className="flex min-h-full items-center justify-center p-4">
+          <div className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-2xl text-center space-y-4 z-10">
+            {loading ? (
+              <div className="py-6 flex flex-col items-center gap-3">
+                <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+                <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  Loading task details...
+                </p>
+              </div>
+            ) : error ? (
+              <div className="py-4 space-y-3">
+                <AlertTriangle className="w-8 h-8 text-rose-500 mx-auto" />
+                <p className="text-xs text-rose-600 dark:text-rose-400 font-medium">{error}</p>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200"
+                >
+                  Close
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Determine permissions for current user
   const isSuperAdmin = user?.role === "SUPER_ADMIN";
@@ -266,6 +350,17 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
             Subtasks ({subtasks.length})
           </button>
           <button
+            onClick={() => setActiveTab("attachments")}
+            className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors ${
+              activeTab === "attachments"
+                ? "border-indigo-600 text-indigo-600 dark:text-indigo-400"
+                : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300"
+            }`}
+          >
+            <Paperclip className="w-3.5 h-3.5" />
+            Attachments ({taskAttachments.length})
+          </button>
+          <button
             onClick={() => setActiveTab("comments")}
             className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors ${
               activeTab === "comments"
@@ -294,7 +389,23 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           {error && (
             <div className="p-3 text-xs bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800 rounded-xl flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{error}</span>
+              <span className="whitespace-pre-line leading-relaxed">{error}</span>
+            </div>
+          )}
+
+          {subordinateStatus && !subordinateStatus.can_complete_or_submit && task && task.assigned_to_id === user?.id && task.status !== "COMPLETED" && (
+            <div className="p-3 text-xs bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200 border border-amber-200 dark:border-amber-800/60 rounded-xl space-y-1.5">
+              <div className="flex items-center gap-1.5 font-semibold text-amber-900 dark:text-amber-100">
+                <Users className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span>Hierarchy Prerequisite Notice</span>
+              </div>
+              <p className="leading-relaxed">
+                You cannot complete or submit this task for approval until all subordinates finish or submit today's tasks ({subordinateStatus.pending_tasks_count} pending).
+              </p>
+              <div className="text-[11px] text-amber-700 dark:text-amber-300 font-medium">
+                Pending: {subordinateStatus.pending_tasks.slice(0, 3).map((p) => `${p.assigned_to_name} ('${p.title}')`).join(", ")}
+                {subordinateStatus.pending_tasks.length > 3 && ` ...+${subordinateStatus.pending_tasks.length - 3} more`}
+              </div>
             </div>
           )}
 
@@ -487,6 +598,18 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                   isRecurring={Boolean(task.is_recurring)}
                 />
               </div>
+
+              {/* Task Attachments Section */}
+              <div className="pt-2">
+                <TaskAttachmentsView
+                  taskId={task.id}
+                  attachments={taskAttachments}
+                  onAttachmentsChanged={handleAttachmentsChanged}
+                  canUpload={true}
+                  canDelete={true}
+                  compact={true}
+                />
+              </div>
             </>
           )}
 
@@ -499,6 +622,18 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                 onSubtasksChanged={handleSubtasksChanged}
                 canManage={true}
                 isRecurring={Boolean(task.is_recurring)}
+              />
+            </div>
+          )}
+
+          {activeTab === "attachments" && (
+            <div className="space-y-4">
+              <TaskAttachmentsView
+                taskId={task.id}
+                attachments={taskAttachments}
+                onAttachmentsChanged={handleAttachmentsChanged}
+                canUpload={true}
+                canDelete={true}
               />
             </div>
           )}

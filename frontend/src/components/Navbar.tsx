@@ -18,6 +18,7 @@ import { approvalsApi } from "@/lib/api";
 import { RoleBadge } from "./RoleBadge";
 import { ThemeToggle } from "./ThemeToggle";
 import { ChangePasswordModal } from "./ChangePasswordModal";
+import { AttendanceQuickButton } from "./AttendanceQuickButton";
 
 export const Navbar: React.FC = () => {
   const { user } = useAuth();
@@ -53,7 +54,7 @@ export const Navbar: React.FC = () => {
   if (!user) return null;
 
   return (
-    <header className="h-16 shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-3 sm:px-6 z-10 sticky top-0">
+    <header className="h-16 shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-3 sm:px-6 z-20 sticky top-0">
       {/* Left side: Hamburger (Mobile) / Collapse Toggle (Desktop) & Role / Identity */}
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         {/* Mobile & Tablet (< lg) Hamburger Menu Button */}
@@ -93,6 +94,9 @@ export const Navbar: React.FC = () => {
 
       {/* Right side: Alerts, Theme, and Profile */}
       <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+        {/* Quick Attendance Punch & Timer */}
+        <AttendanceQuickButton />
+
         {/* Approvals Alert Notification */}
         {pendingCount > 0 && (
           <Link

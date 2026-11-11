@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Network, ArrowRight, AlertCircle, ShieldCheck, Download } from "lucide-react";
+import { Network, ArrowRight, AlertCircle, ShieldCheck, Download, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { usePwa } from "@/context/PwaContext";
 import { getErrorMessage } from "@/lib/api";
@@ -12,6 +12,7 @@ export default function LoginPage() {
   const { isInstalled, promptInstall } = usePwa();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expiredNotice, setExpiredNotice] = useState(false);
@@ -50,7 +51,7 @@ export default function LoginPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-gradient-to-br dark:from-slate-900 dark:via-slate-800 dark:to-indigo-950 flex flex-col justify-center items-center p-4 sm:p-6 text-slate-900 dark:text-white relative transition-colors duration-200">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 dark:bg-gradient-to-br dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 flex flex-col justify-center items-center p-4 sm:p-6 text-slate-900 dark:text-white relative transition-colors duration-200">
       {/* Top Header Actions (Theme Toggle & Install Button) */}
       <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
         {!isInstalled && (
@@ -113,14 +114,28 @@ export default function LoginPage() {
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
                 Password
               </label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/80 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-3.5 py-2.5 pr-10 text-sm rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/80 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
             </div>
 
             <button

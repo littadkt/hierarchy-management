@@ -45,6 +45,7 @@ eggs/
 .eggs/
 lib/
 lib64/
+!frontend/src/lib/
 parts/
 sdist/
 var/
@@ -96,10 +97,12 @@ out/
 next-env.d.ts
 
 # ------------------------------------------
-# Database Backups & Dumps
+# Database Backups, Uploads & Dumps
 # ------------------------------------------
 backend/backups/
 backups/
+backend/uploads/
+uploads/
 *.sql
 *.sqlite
 *.sqlite3

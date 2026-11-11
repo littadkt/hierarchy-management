@@ -3,7 +3,9 @@ import uuid
 from fastapi import HTTPException, status
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.models.branch import Branch
 from app.models.inventory import InventoryItem
 from app.schemas.inventory import InventoryItemCreate, InventoryItemUpdate
 
@@ -11,25 +13,43 @@ from app.schemas.inventory import InventoryItemCreate, InventoryItemUpdate
 class InventoryService:
     @staticmethod
     async def get_by_id(session: AsyncSession, item_id: uuid.UUID) -> Optional[InventoryItem]:
-        stmt = select(InventoryItem).where(InventoryItem.id == item_id)
+        stmt = (
+            select(InventoryItem)
+            .options(selectinload(InventoryItem.branch))
+            .where(InventoryItem.id == item_id)
+        )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def get_by_code(session: AsyncSession, code: str) -> Optional[InventoryItem]:
-        stmt = select(InventoryItem).where(InventoryItem.code == code)
+    async def get_by_code(
+        session: AsyncSession,
+        code: str,
+        branch_id: Optional[uuid.UUID] = None,
+    ) -> Optional[InventoryItem]:
+        stmt = (
+            select(InventoryItem)
+            .options(selectinload(InventoryItem.branch))
+            .where(InventoryItem.code == code)
+        )
+        if branch_id is not None:
+            stmt = stmt.where(InventoryItem.branch_id == branch_id)
         result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     @staticmethod
     async def list_items(
         session: AsyncSession,
         search: Optional[str] = None,
         category: Optional[str] = None,
+        branch_id: Optional[uuid.UUID] = None,
         skip: int = 0,
         limit: int = 50,
     ) -> Tuple[List[InventoryItem], int]:
-        stmt = select(InventoryItem)
+        stmt = select(InventoryItem).options(selectinload(InventoryItem.branch))
+
+        if branch_id is not None:
+            stmt = stmt.where(InventoryItem.branch_id == branch_id)
 
         if category:
             stmt = stmt.where(InventoryItem.category.ilike(f"%{category}%"))
@@ -61,14 +81,26 @@ class InventoryService:
     ) -> InventoryItem:
         code = item_in.code.strip() if item_in.code and item_in.code.strip() else f"INV-{uuid.uuid4().hex[:8].upper()}"
 
-        existing = await InventoryService.get_by_code(session, code)
+        target_branch_id = item_in.branch_id
+        if not target_branch_id:
+            # Fallback to the first active branch if present
+            first_branch = (
+                await session.execute(
+                    select(Branch.id).where(Branch.is_active == True).order_by(Branch.created_at.asc()).limit(1)
+                )
+            ).scalar_one_or_none()
+            target_branch_id = first_branch
+
+        existing = await InventoryService.get_by_code(session, code, branch_id=target_branch_id)
         if existing:
+            branch_label = f" in branch '{existing.branch.name}'" if existing.branch else ""
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Inventory item with barcode '{code}' already exists.",
+                detail=f"Inventory item with barcode '{code}' already exists{branch_label}.",
             )
 
         item = InventoryItem(
+            branch_id=target_branch_id,
             code=code,
             name=item_in.name.strip() if item_in.name else "",
             rate=float(item_in.rate or 0.0),
@@ -79,8 +111,7 @@ class InventoryService:
         )
         session.add(item)
         await session.commit()
-        await session.refresh(item)
-        return item
+        return await InventoryService.get_by_id(session, item.id)
 
     @staticmethod
     async def update_item(
@@ -93,18 +124,22 @@ class InventoryService:
                 detail="Inventory item not found",
             )
 
-        if item_in.code is not None:
-            new_code = item_in.code.strip()
+        target_branch_id = item_in.branch_id if item_in.branch_id is not None else item.branch_id
+
+        if item_in.code is not None or item_in.branch_id is not None:
+            new_code = item_in.code.strip() if item_in.code is not None else item.code
             if not new_code:
                 new_code = item.code
-            if new_code != item.code:
-                existing = await InventoryService.get_by_code(session, new_code)
-                if existing:
+            if new_code != item.code or target_branch_id != item.branch_id:
+                existing = await InventoryService.get_by_code(session, new_code, branch_id=target_branch_id)
+                if existing and existing.id != item.id:
+                    branch_label = f" in branch '{existing.branch.name}'" if existing.branch else ""
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Barcode '{new_code}' is already assigned to another item.",
+                        detail=f"Barcode '{new_code}' is already assigned to another item{branch_label}.",
                     )
                 item.code = new_code
+                item.branch_id = target_branch_id
 
         if item_in.name is not None:
             item.name = item_in.name.strip()
@@ -120,8 +155,7 @@ class InventoryService:
             item.quantity = int(item_in.quantity or 0)
 
         await session.commit()
-        await session.refresh(item)
-        return item
+        return await InventoryService.get_by_id(session, item.id)
 
     @staticmethod
     async def update_quantity(
@@ -135,8 +169,7 @@ class InventoryService:
             )
         item.quantity = quantity
         await session.commit()
-        await session.refresh(item)
-        return item
+        return await InventoryService.get_by_id(session, item.id)
 
     @staticmethod
     async def delete_item(
@@ -174,13 +207,21 @@ class InventoryService:
 
     @staticmethod
     async def bulk_import_from_excel(
-        session: AsyncSession, rows: List[dict]
+        session: AsyncSession,
+        rows: List[dict],
+        default_branch_id: Optional[uuid.UUID] = None,
     ) -> dict:
         total_rows = len(rows)
         success_count = 0
         updated_count = 0
         failed_count = 0
         errors: List[str] = []
+
+        # Load all branches to map rows by branch name/code if present in Excel
+        branches = (await session.execute(select(Branch))).scalars().all()
+        branch_by_name = {b.name.lower().strip(): b.id for b in branches}
+        branch_by_code = {b.code.lower().strip(): b.id for b in branches if b.code}
+        first_branch_id = branches[0].id if branches else None
 
         for idx, row in enumerate(rows, start=1):
             code = str(row.get("code") or "").strip()
@@ -213,7 +254,16 @@ class InventoryService:
             brand = str(row.get("brand") or "Generic").strip()
             vendor = str(row.get("vendor") or "Standard Vendor").strip()
 
-            existing = await InventoryService.get_by_code(session, code)
+            # Determine target branch for this item
+            branch_raw = str(row.get("branch") or row.get("branch_name") or "").strip().lower()
+            row_branch_id = (
+                branch_by_name.get(branch_raw)
+                or branch_by_code.get(branch_raw)
+                or default_branch_id
+                or first_branch_id
+            )
+
+            existing = await InventoryService.get_by_code(session, code, branch_id=row_branch_id)
             if existing:
                 existing.name = name
                 existing.rate = rate_val
@@ -221,9 +271,12 @@ class InventoryService:
                 existing.brand = brand
                 existing.vendor = vendor
                 existing.quantity = qty_val
+                if row_branch_id:
+                    existing.branch_id = row_branch_id
                 updated_count += 1
             else:
                 item = InventoryItem(
+                    branch_id=row_branch_id,
                     code=code,
                     name=name,
                     rate=rate_val,
@@ -243,4 +296,5 @@ class InventoryService:
             "failed_count": failed_count,
             "errors": errors,
         }
+
 

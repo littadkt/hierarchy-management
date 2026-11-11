@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   CheckSquare,
+  CalendarCheck2,
   ListTodo,
   ShieldAlert,
   Network,
@@ -22,6 +23,8 @@ import {
   ChevronRight,
   X,
   Download,
+  Wrench,
+  ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -40,25 +43,37 @@ export const Sidebar: React.FC = () => {
   if (!user) return null;
 
   const navItems = [
-    { label: "Dashboard", href: "/", icon: LayoutDashboard },
-    { label: "Tasks", href: "/tasks", icon: CheckSquare },
-    { label: "My Checklist", href: "/checklist", icon: ListTodo },
-    { label: "Approvals", href: "/approvals", icon: ShieldAlert },
-    { label: "Purchase Desk", href: "/purchases", icon: ShoppingBag },
-    { label: "Inventory", href: "/inventory", icon: Boxes },
-    { label: "Wholesale Orders", href: "/wholesale", icon: Truck },
-    { label: "Org Hierarchy", href: "/hierarchy", icon: Network },
-    { label: "Team & Users", href: "/users", icon: Users },
+    { label: "Dashboard", href: "/", icon: LayoutDashboard, windowKey: "dashboard" },
+    { label: "Attendance", href: "/attendance", icon: CalendarCheck2, windowKey: "attendance" },
+    { label: "Tasks", href: "/tasks", icon: CheckSquare, windowKey: "tasks" },
+    { label: "My Checklist", href: "/checklist", icon: ListTodo, windowKey: "checklist" },
+    { label: "Approvals", href: "/approvals", icon: ShieldAlert, windowKey: "approvals" },
+    { label: "Purchase Desk", href: "/purchases", icon: ShoppingBag, windowKey: "purchases" },
+    { label: "Inventory", href: "/inventory", icon: Boxes, windowKey: "inventory" },
+    { label: "Warranty", href: "/warranty", icon: Wrench, windowKey: "warranty" },
+    { label: "Wholesale Orders", href: "/wholesale", icon: Truck, windowKey: "wholesale" },
+    { label: "Org Hierarchy", href: "/hierarchy", icon: Network, windowKey: "hierarchy" },
+    { label: "Team & Users", href: "/users", icon: Users, windowKey: "users" },
     ...(user.role === "SUPER_ADMIN" || user.role === "ADMIN"
       ? [
-          { label: "Branches", href: "/branches", icon: Building2 },
-          { label: "Departments", href: "/departments", icon: Layers },
+          { label: "Accessible Windows", href: "/accessible-windows", icon: ShieldCheck, windowKey: "accessible_windows" },
+          { label: "Branches", href: "/branches", icon: Building2, windowKey: "branches" },
+          { label: "Departments", href: "/departments", icon: Layers, windowKey: "departments" },
         ]
       : []),
     ...(user.role === "SUPER_ADMIN"
-      ? [{ label: "Backup & Restore", href: "/backup", icon: Database }]
+      ? [{ label: "Backup & Restore", href: "/backup", icon: Database, windowKey: "backup" }]
       : []),
   ];
+
+  const visibleNavItems = navItems.filter((item) => {
+    if (user.role === "SUPER_ADMIN") return true;
+    if (!item.windowKey) return true;
+    if (user.permissions && user.permissions[item.windowKey]) {
+      return user.permissions[item.windowKey].display !== false;
+    }
+    return true;
+  });
 
   return (
     <>
@@ -112,6 +127,9 @@ export const Sidebar: React.FC = () => {
           {/* Action controls in header */}
           <div className="flex items-center gap-1 shrink-0">
             {/* Theme Toggle (hidden when collapsed on desktop to conserve space) */}
+            <div className={isCollapsed ? "lg:hidden" : ""}>
+              <ThemeToggle />
+            </div>
 
 
             {/* Minimize / Collapse Toggle Button (Desktop & Tablet >= lg) */}
@@ -148,7 +166,7 @@ export const Sidebar: React.FC = () => {
             </div>
           )}
 
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive = pathname === item.href;
             const Icon = item.icon;
 

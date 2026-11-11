@@ -139,3 +139,124 @@ async def test_incharge_eligible_approver_flow(async_client: AsyncClient):
     )
     assert approve_res.status_code == 200
     assert approve_res.json()["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_approvals_sorting_by_approver_and_date(async_client: AsyncClient):
+    """
+    Test sorting pending approvals by designated approver and by date
+    """
+    await seed_data()
+
+    # Login as Super Admin
+    sa_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "superadmin@example.com", "password": "SuperAdmin@123"},
+    )
+    assert sa_login.status_code == 200
+    sa_headers = {"Authorization": f"Bearer {sa_login.json()['access_token']}"}
+
+    # Login as In-Charge and Team Leader
+    incharge_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "incharge@example.com", "password": "InCharge@123"},
+    )
+    incharge_headers = {"Authorization": f"Bearer {incharge_login.json()['access_token']}"}
+    incharge_id = incharge_login.json()["user"]["id"]
+
+    tl_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "teamleader@example.com", "password": "TeamLeader@123"},
+    )
+    tl_headers = {"Authorization": f"Bearer {tl_login.json()['access_token']}"}
+    tl_id = tl_login.json()["user"]["id"]
+
+    admin_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "admin@example.com", "password": "Admin@123"},
+    )
+    admin_id = admin_login.json()["user"]["id"]
+
+    # Task 1: Created by Team Leader, Approver = In-Charge (Sarah Connor), Due Date = 2026-12-01
+    task1_res = await async_client.post(
+        "/api/v1/tasks/",
+        json={
+            "title": "Task For Sarah Approval",
+            "assigned_to_id": tl_id,
+            "requires_approval": True,
+            "approver_id": incharge_id,
+            "due_date": "2026-12-01T10:00:00Z",
+            "priority": "MEDIUM",
+        },
+        headers=tl_headers,
+    )
+    assert task1_res.status_code == 201
+    task1_id = task1_res.json()["id"]
+
+    # Task 2: Created by In-Charge, Approver = Admin (Alex Mercer), Due Date = 2026-11-15
+    task2_res = await async_client.post(
+        "/api/v1/tasks/",
+        json={
+            "title": "Task For Alex Approval",
+            "assigned_to_id": incharge_id,
+            "requires_approval": True,
+            "approver_id": admin_id,
+            "due_date": "2026-11-15T10:00:00Z",
+            "priority": "HIGH",
+        },
+        headers=incharge_headers,
+    )
+    assert task2_res.status_code == 201
+    task2_id = task2_res.json()["id"]
+
+    # Submit both tasks for approval
+    sub1 = await async_client.post(f"/api/v1/approvals/{task1_id}/submit", json={"comments": "Done 1"}, headers=tl_headers)
+    assert sub1.status_code == 200
+    sub2 = await async_client.post(f"/api/v1/approvals/{task2_id}/submit", json={"comments": "Done 2"}, headers=incharge_headers)
+    assert sub2.status_code == 200
+
+    # Test 1: Sort by approver ascending (Alex Mercer before Sarah Connor)
+    approver_asc_res = await async_client.get(
+        "/api/v1/approvals/pending?sort_by=approver&order=asc",
+        headers=sa_headers,
+    )
+    assert approver_asc_res.status_code == 200
+    items = approver_asc_res.json()
+    our_items = [t for t in items if t["id"] in [task1_id, task2_id]]
+    assert len(our_items) == 2
+    assert our_items[0]["approver"]["full_name"] <= our_items[1]["approver"]["full_name"]
+    assert our_items[0]["id"] == task2_id  # Alex Mercer
+
+    # Test 2: Sort by approver descending (Sarah Connor before Alex Mercer)
+    approver_desc_res = await async_client.get(
+        "/api/v1/approvals/pending?sort_by=approver&order=desc",
+        headers=sa_headers,
+    )
+    assert approver_desc_res.status_code == 200
+    items = approver_desc_res.json()
+    our_items = [t for t in items if t["id"] in [task1_id, task2_id]]
+    assert len(our_items) == 2
+    assert our_items[0]["approver"]["full_name"] >= our_items[1]["approver"]["full_name"]
+    assert our_items[0]["id"] == task1_id  # Sarah Connor
+
+    # Test 3: Sort by due date ascending (2026-11-15 before 2026-12-01)
+    due_asc_res = await async_client.get(
+        "/api/v1/approvals/pending?sort_by=due_date&order=asc",
+        headers=sa_headers,
+    )
+    assert due_asc_res.status_code == 200
+    items = due_asc_res.json()
+    our_items = [t for t in items if t["id"] in [task1_id, task2_id]]
+    assert len(our_items) == 2
+    assert our_items[0]["id"] == task2_id  # Earlier due date first
+
+    # Test 4: Sort by submission date (date) descending
+    date_desc_res = await async_client.get(
+        "/api/v1/approvals/pending?sort_by=date&order=desc",
+        headers=sa_headers,
+    )
+    assert date_desc_res.status_code == 200
+    items = date_desc_res.json()
+    our_items = [t for t in items if t["id"] in [task1_id, task2_id]]
+    assert len(our_items) == 2
+    assert our_items[0]["id"] == task2_id  # Task 2 submitted after Task 1

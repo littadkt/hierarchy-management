@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { X, Boxes, AlertCircle } from "lucide-react";
-import { inventoryApi, getErrorMessage } from "@/lib/api";
-import { InventoryItem } from "@/lib/types";
+import { X, Boxes, AlertCircle, Building } from "lucide-react";
+import { inventoryApi, branchesApi, getErrorMessage } from "@/lib/api";
+import { Branch, InventoryItem } from "@/lib/types";
 
 interface EditInventoryModalProps {
   item: InventoryItem | null;
@@ -11,6 +11,7 @@ interface EditInventoryModalProps {
   onClose: () => void;
   onItemUpdated: () => void;
   quickQuantityOnly?: boolean;
+  branches?: Branch[];
 }
 
 export const EditInventoryModal: React.FC<EditInventoryModalProps> = ({
@@ -19,7 +20,10 @@ export const EditInventoryModal: React.FC<EditInventoryModalProps> = ({
   onClose,
   onItemUpdated,
   quickQuantityOnly = false,
+  branches: propBranches,
 }) => {
+  const [branchId, setBranchId] = useState("");
+  const [availableBranches, setAvailableBranches] = useState<Branch[]>(propBranches || []);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [rate, setRate] = useState<number>(0);
@@ -32,7 +36,18 @@ export const EditInventoryModal: React.FC<EditInventoryModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (propBranches && propBranches.length > 0) {
+      setAvailableBranches(propBranches);
+    } else if (isOpen) {
+      branchesApi.list(true).then((bList) => {
+        setAvailableBranches(bList);
+      }).catch(() => {});
+    }
+  }, [propBranches, isOpen]);
+
+  useEffect(() => {
     if (item) {
+      setBranchId(item.branch_id || "");
       setName(item.name);
       setCode(item.code);
       setRate(item.rate);
@@ -56,6 +71,7 @@ export const EditInventoryModal: React.FC<EditInventoryModalProps> = ({
         await inventoryApi.updateQuantity(item.id, Number(quantity) || 0);
       } else {
         await inventoryApi.update(item.id, {
+          branch_id: branchId || undefined,
           name: name.trim(),
           code: code.trim() || undefined,
           rate: Number(rate) || 0,
@@ -151,6 +167,27 @@ export const EditInventoryModal: React.FC<EditInventoryModalProps> = ({
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3">
+                {availableBranches.length > 0 && (
+                  <div className="col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <Building className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Branch Location</span>
+                    </label>
+                    <select
+                      value={branchId}
+                      onChange={(e) => setBranchId(e.target.value)}
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                    >
+                      <option value="">Default Branch</option>
+                      {availableBranches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} {b.city ? `(${b.city})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <div className="col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Product Name <span className="text-slate-400 font-normal">(Optional)</span>

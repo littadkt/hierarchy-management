@@ -4,6 +4,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.task import RecurrencePattern, TaskPriority, TaskStatus
+from app.schemas.attachment import AttachmentOut
 from app.schemas.subtask import SubtaskCreate, SubtaskOut
 from app.schemas.user import UserBrief
 
@@ -103,6 +104,7 @@ class TaskOut(BaseModel):
     parent_task_id: Optional[uuid.UUID] = None
 
     completed_at: Optional[datetime] = None
+    order_index: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -112,6 +114,7 @@ class TaskOut(BaseModel):
 
     subtasks_count: int = 0
     completed_subtasks_count: int = 0
+    attachments_count: int = 0
 
     @field_validator("recurrence_days_of_week", mode="before")
     @classmethod
@@ -129,9 +132,15 @@ class TaskDetailOut(TaskOut):
     comments_count: int = 0
     activities_count: int = 0
     subtasks: List[SubtaskOut] = []
+    attachments: List[AttachmentOut] = []
 
 
 class BulkDeleteTasks(BaseModel):
     task_ids: List[uuid.UUID]
+
+
+class TaskReorderRequest(BaseModel):
+    task_ids: List[uuid.UUID]
+
 
 

@@ -120,3 +120,54 @@ async def test_checklist_personal_quick_tasks(async_client: AsyncClient):
     assert empty_list.status_code == 200
     assert len(empty_list.json()) == 0
 
+    # 11. Test selecting a user for a checklist item
+    # Fetch selectable users from /api/v1/checklist/users
+    users_res = await async_client.get("/api/v1/checklist/users", headers=staff_headers)
+    assert users_res.status_code == 200
+    user_list = users_res.json()
+    assert len(user_list) > 0
+
+    # Find admin's user id
+    admin_info = await async_client.get("/api/v1/auth/me", headers=admin_headers)
+    assert admin_info.status_code == 200
+    admin_user_id = admin_info.json()["id"]
+
+    # Staff 1 creates a checklist item with Admin selected as target_user
+    tagged_item_res = await async_client.post(
+        "/api/v1/checklist/",
+        headers=staff_headers,
+        json={
+            "title": "Discuss supply chain issue with Admin",
+            "target_user_id": admin_user_id,
+        },
+    )
+    assert tagged_item_res.status_code == 201
+    tagged_item = tagged_item_res.json()
+    assert tagged_item["target_user_id"] == admin_user_id
+    assert tagged_item["target_user"] is not None
+    assert tagged_item["target_user"]["id"] == admin_user_id
+
+    # Verify that selecting a user DOES NOT add the item to Admin's checklist
+    # (Remains purely in Staff 1's checklist - "just a select option")
+    admin_checklist_res = await async_client.get("/api/v1/checklist/", headers=admin_headers)
+    assert admin_checklist_res.status_code == 200
+    admin_items = [it["id"] for it in admin_checklist_res.json()]
+    assert tagged_item["id"] not in admin_items
+
+    # Staff 1's checklist DOES have the item with target_user populated
+    staff_checklist_res = await async_client.get("/api/v1/checklist/", headers=staff_headers)
+    assert staff_checklist_res.status_code == 200
+    my_tagged = [it for it in staff_checklist_res.json() if it["id"] == tagged_item["id"]][0]
+    assert my_tagged["target_user_id"] == admin_user_id
+    assert my_tagged["target_user"]["full_name"] == admin_info.json()["full_name"]
+
+    # Update item to clear selected user
+    update_res = await async_client.put(
+        f"/api/v1/checklist/{tagged_item['id']}",
+        headers=staff_headers,
+        json={"target_user_id": None},
+    )
+    assert update_res.status_code == 200
+    assert update_res.json()["target_user_id"] is None
+
+

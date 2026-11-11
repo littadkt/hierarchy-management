@@ -11,6 +11,7 @@ import {
   ArrowRight,
   TrendingUp,
   Clock,
+  CheckCircle2,
   Sparkles,
   ShoppingBag,
   Boxes,
@@ -31,6 +32,7 @@ import { CreateTaskModal } from "@/components/CreateTaskModal";
 import { TaskDetailModal } from "@/components/TaskDetailModal";
 import { QuickChecklistWidget } from "@/components/QuickChecklistWidget";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
+import { TaskPerformanceWidget } from "@/components/TaskPerformanceWidget";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -90,6 +92,7 @@ export default function DashboardPage() {
       "WHOLESALE_ORDER_CREATED",
       "WHOLESALE_ORDER_UPDATED",
       "WHOLESALE_ORDER_DELETED",
+      "ATTENDANCE_UPDATED",
       "RESYNC",
     ],
     (event) => {
@@ -173,10 +176,10 @@ export default function DashboardPage() {
         )}
 
         {/* Welcome Banner */}
-        <div className="bg-gradient-to-r from-indigo-700 via-purple-700 to-indigo-800 rounded-2xl sm:rounded-3xl p-5 sm:p-8 text-white shadow-xl relative overflow-hidden">
-          <div className="relative z-10 max-w-2xl space-y-2">
+        <div className="bg-gradient-to-r from-indigo-700 via-purple-700 to-indigo-800 dark:from-slate-900 dark:via-indigo-950/70 dark:to-slate-900 rounded-2xl sm:rounded-3xl p-5 sm:p-8 text-white shadow-xl relative overflow-hidden border border-transparent dark:border-slate-800">
+          <div className="relative z-[1] max-w-2xl space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md text-xs font-medium text-white/90">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 dark:bg-white/5 backdrop-blur-md text-xs font-medium text-white/90">
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 <span>Hierarchical Role-Based Task Engine</span>
               </div>
@@ -200,56 +203,56 @@ export default function DashboardPage() {
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
               Welcome back, {user?.full_name}
             </h1>
-            <p className="text-sm text-indigo-100/90 leading-relaxed">
+            <p className="text-sm text-indigo-100/90 dark:text-slate-300 leading-relaxed">
               Your organizational role is <strong className="underline">{user?.role}</strong>. Task
               provisions, assignment ceilings, and approval restrictions are automatically enforced.
             </p>
             <div className="pt-2 flex items-center gap-2 sm:gap-3 flex-wrap">
               <button
                 onClick={() => setIsCreateTaskOpen(true)}
-                className="px-4 py-2 rounded-xl bg-white text-indigo-700 font-bold text-xs hover:bg-indigo-50 shadow-md transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white text-indigo-700 dark:bg-indigo-600 dark:text-white dark:hover:bg-indigo-500 font-bold text-xs hover:bg-indigo-50 shadow-md transition-all flex items-center gap-1.5"
               >
                 <Plus className="w-4 h-4" />
                 <span>Create Task</span>
               </button>
               <Link
                 href="/approvals"
-                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:text-slate-200 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
               >
                 <ShieldAlert className="w-4 h-4" />
                 <span>Review Approvals</span>
               </Link>
               <Link
                 href="/purchases"
-                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:text-slate-200 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
               >
                 <ShoppingBag className="w-4 h-4" />
                 <span>Purchase Desk</span>
               </Link>
               <Link
                 href="/inventory"
-                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:text-slate-200 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
               >
                 <Boxes className="w-4 h-4" />
                 <span>Inventory</span>
               </Link>
               <Link
                 href="/wholesale"
-                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:text-slate-200 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
               >
                 <Truck className="w-4 h-4" />
                 <span>Wholesale Orders</span>
               </Link>
               <Link
                 href="/checklist"
-                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:text-slate-200 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
               >
                 <ListTodo className="w-4 h-4" />
                 <span>My Checklist</span>
               </Link>
             </div>
           </div>
-          <div className="absolute -right-12 -bottom-12 w-64 h-64 bg-purple-500/20 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute -right-12 -bottom-12 w-64 h-64 bg-purple-500/20 dark:bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
         </div>
 
         {/* Metric Cards Grid */}
@@ -387,19 +390,29 @@ export default function DashboardPage() {
                     </div>
 
                     <div className="shrink-0 text-right">
-                      {member.today_first_login_at ? (
+                      {member.check_out_time ? (
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-300 dark:border-slate-700 shadow-xs">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-slate-500" />
+                          <span>
+                            Out: {new Date(member.check_out_time).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+                      ) : member.today_first_login_at ? (
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 shadow-xs">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                           <Clock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                           <span>
-                            {new Date(member.today_first_login_at).toLocaleTimeString([], {
+                            In: {new Date(member.today_first_login_at).toLocaleTimeString([], {
                               hour: "2-digit",
                               minute: "2-digit",
                             })}
                           </span>
                         </div>
                       ) : (
-                        <span className="text-[10px] text-slate-400 italic">Not logged in</span>
+                        <span className="text-[10px] text-slate-400 italic">Not checked in</span>
                       )}
                     </div>
                   </div>
@@ -472,6 +485,12 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
+
+        {/* Task & Subtask Performance Analytics */}
+        <TaskPerformanceWidget
+          initialData={stats?.task_performance}
+          onRefresh={() => loadDashboardData(true)}
+        />
 
         {/* Tasks List (Today's Tasks / All Scope Tasks) */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xs overflow-hidden">

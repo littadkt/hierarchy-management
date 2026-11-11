@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { X, CheckSquare, AlertCircle, Clock, ShieldAlert, Repeat } from "lucide-react";
+import { X, CheckSquare, AlertCircle, Clock, ShieldAlert, Repeat, Paperclip } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { tasksApi, usersApi, getErrorMessage } from "@/lib/api";
-import { RecurrencePattern, Task, TaskPriority, User, UserBrief } from "@/lib/types";
+import { tasksApi, attachmentsApi, usersApi, getErrorMessage } from "@/lib/api";
+import { RecurrencePattern, Task, TaskAttachment, TaskPriority, User, UserBrief } from "@/lib/types";
+import { TaskAttachmentsView } from "./TaskAttachmentsView";
 
 interface EditTaskModalProps {
   task: Task | null;
@@ -64,9 +65,24 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
 
   const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
   const [eligibleApprovers, setEligibleApprovers] = useState<UserBrief[]>([]);
+  const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const refreshAttachments = async () => {
+    if (!task) return;
+    try {
+      const fetcher = attachmentsApi?.list || tasksApi?.getAttachments;
+      if (fetcher) {
+        const atts = await fetcher(task.id);
+        setAttachments(atts);
+      }
+      onTaskUpdated();
+    } catch {
+      // Soft fail
+    }
+  };
 
   useEffect(() => {
     if (isOpen && task) {
@@ -117,6 +133,8 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
           setAssignableUsers(users);
         })
         .catch(() => {});
+
+      refreshAttachments();
     }
   }, [isOpen, task]);
 
@@ -533,6 +551,18 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
               )}
             </div>
           )}
+
+          {/* Task File Attachments */}
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+            <TaskAttachmentsView
+              taskId={task.id}
+              attachments={attachments}
+              onAttachmentsChanged={refreshAttachments}
+              canUpload={true}
+              canDelete={true}
+              compact={true}
+            />
+          </div>
 
           <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
             <button
