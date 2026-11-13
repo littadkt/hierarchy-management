@@ -86,7 +86,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
           onClick={() => setIsOpen((prev) => !prev)}
           aria-label="Customize Theme & Colors"
           title="Customize Theme & Colors"
-          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors flex items-center gap-1 cursor-pointer"
+          className="hidden sm:flex p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors items-center gap-1 cursor-pointer shrink-0"
         >
           <span
             className="w-3 h-3 rounded-full shrink-0 shadow-xs border border-white/40"
@@ -100,7 +100,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
 
       {/* Theme & Color Picker Dropdown Menu */}
       {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-56 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl p-3 z-50 animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute right-0 top-full mt-2 w-56 max-w-[calc(100vw-2rem)] rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl p-3 z-50 animate-in fade-in zoom-in-95 duration-150">
           {/* Mode Selector */}
           <div className="mb-3">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 px-1 mb-1.5 block">

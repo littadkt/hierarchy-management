@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import uuid
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,6 +111,8 @@ async def get_task_performance(
     user_id: Optional[uuid.UUID] = Query(None, description="Filter performance for a specific user"),
     branch: Optional[str] = Query(None, description="Filter performance for a specific branch"),
     department: Optional[str] = Query(None, description="Filter performance for a specific department"),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD start date filter"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD end date filter"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -120,6 +122,7 @@ async def get_task_performance(
     - Subtask checklist completion rate, total subtasks, pending subtasks
     - Combined overall performance score (0 - 100%)
     - Subordinate team member performance leaderboard
+    - Filterable by user_id and date range
     """
     return await TaskService.get_performance_stats(
         session=session,
@@ -127,6 +130,37 @@ async def get_task_performance(
         user_id=user_id,
         branch=branch,
         department=department,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@router.get("/performance/export")
+async def export_performance_report(
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD start date filter"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD end date filter"),
+    user_id: Optional[uuid.UUID] = Query(None, description="Filter performance for a specific user"),
+    branch: Optional[str] = Query(None, description="Filter performance for a specific branch"),
+    department: Optional[str] = Query(None, description="Filter performance for a specific department"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download task & subtask performance report as a formatted Excel spreadsheet"""
+    excel_bytes = await TaskService.export_performance_report_excel(
+        session=session,
+        current_user=current_user,
+        user_id=user_id,
+        branch=branch,
+        department=department,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"task_performance_report_{timestamp}.xlsx"
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

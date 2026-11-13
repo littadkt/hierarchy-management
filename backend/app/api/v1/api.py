@@ -18,6 +18,8 @@ from app.api.v1.endpoints import (
     realtime,
     warranty,
     permissions,
+    schedules,
+    notifications,
 )
 
 api_router = APIRouter()
@@ -43,6 +45,12 @@ api_router.include_router(
 )
 api_router.include_router(
     attendance.router, prefix="/attendance", tags=["Attendance & Check-in"]
+)
+api_router.include_router(
+    schedules.router, prefix="/schedules", tags=["Time Schedules & Shifts"]
+)
+api_router.include_router(
+    notifications.router, prefix="/notifications", tags=["Notifications"]
 )
 api_router.include_router(
     backup.router, prefix="/backup", tags=["Database Backup & Restore"]

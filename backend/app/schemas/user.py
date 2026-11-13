@@ -12,6 +12,9 @@ class UserBase(BaseModel):
     role: Role
     branch: Optional[str] = None
     department: Optional[str] = None
+    schedule_id: Optional[uuid.UUID] = None
+    check_in_time: Optional[str] = Field(None, description="HH:MM (e.g. 09:00)")
+    check_out_time: Optional[str] = Field(None, description="HH:MM (e.g. 18:00)")
 
 
 class UserCreate(UserBase):
@@ -38,6 +41,9 @@ class UserUpdate(BaseModel):
     can_place_wholesale_orders: Optional[bool] = None
     branch: Optional[str] = None
     department: Optional[str] = None
+    schedule_id: Optional[uuid.UUID] = None
+    check_in_time: Optional[str] = Field(None, description="HH:MM (e.g. 09:00)")
+    check_out_time: Optional[str] = Field(None, description="HH:MM (e.g. 18:00)")
     is_on_leave: Optional[bool] = None
     leave_date: Optional[str] = None
     leave_reason: Optional[str] = None
@@ -79,6 +85,10 @@ class UserBrief(BaseModel):
     can_place_wholesale_orders: bool = False
     branch: Optional[str] = None
     department: Optional[str] = None
+    schedule_id: Optional[uuid.UUID] = None
+    check_in_time: Optional[str] = None
+    check_out_time: Optional[str] = None
+    schedule_name: Optional[str] = None
     reports_to_id: Optional[uuid.UUID] = None
     last_login_at: Optional[datetime] = None
     today_first_login_at: Optional[datetime] = None
@@ -97,6 +107,10 @@ class UserOut(UserBase):
     can_place_wholesale_orders: bool = False
     branch: Optional[str] = None
     department: Optional[str] = None
+    schedule_id: Optional[uuid.UUID] = None
+    check_in_time: Optional[str] = None
+    check_out_time: Optional[str] = None
+    schedule_name: Optional[str] = None
     reports_to_id: Optional[uuid.UUID] = None
     created_by_id: Optional[uuid.UUID] = None
     created_at: datetime

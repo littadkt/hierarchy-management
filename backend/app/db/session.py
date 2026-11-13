@@ -15,10 +15,19 @@ pool_kwargs = (
     else {"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20}
 )
 
+connect_args = {
+    "statement_cache_size": 0,
+    "prepared_statement_cache_size": 0,
+    "server_settings": {
+        "search_path": "public",
+    },
+}
+
 engine = create_async_engine(
     settings.SQLALCHEMY_DATABASE_URI,
     echo=False,
     future=True,
+    connect_args=connect_args,
     **pool_kwargs,
 )
 

@@ -42,8 +42,88 @@ async def run_daily_backup_job():
         logger.error(f"Scheduled daily database backup encountered an error: {e}")
 
 
+async def check_checkout_reminders():
+    """Background job checking for employees nearing checkout time to remind them to check out."""
+    async with AsyncSessionLocal() as session:
+        try:
+            from sqlalchemy import func
+            from app.models.attendance import Attendance
+            from app.models.notification import Notification
+            from app.models.user import User
+            from app.services.notification_service import NotificationService
+            from app.services.attendance_service import AttendanceService
+
+            today = AttendanceService.get_today_date_str()
+            # Active attendances for today where user hasn't checked out yet
+            stmt = (
+                select(Attendance)
+                .options(selectinload(Attendance.user).selectinload(User.schedule))
+                .where(
+                    Attendance.date == today,
+                    Attendance.check_in_time.isnot(None),
+                    Attendance.check_out_time.is_(None),
+                )
+            )
+            records = (await session.execute(stmt)).scalars().all()
+            if not records:
+                return
+
+            now_local = datetime.now().astimezone()
+            actual_total_mins = now_local.hour * 60 + now_local.minute
+
+            for att in records:
+                user = att.user
+                if not user:
+                    continue
+
+                sched_out = att.schedule_check_out or (
+                    user.check_out_time or (user.schedule.check_out_time if user.schedule else None)
+                )
+                if not sched_out or ":" not in sched_out:
+                    continue
+
+                try:
+                    parts = sched_out.strip().split(":")
+                    sched_total_mins = int(parts[0]) * 60 + int(parts[1])
+                    diff_mins = sched_total_mins - actual_total_mins
+
+                    # Remind user when within 15 minutes before checkout or up to 30 mins after checkout
+                    if -30 <= diff_mins <= 15:
+                        start_of_today = datetime(
+                            now_local.year, now_local.month, now_local.day, 0, 0, 0, tzinfo=now_local.tzinfo
+                        )
+                        existing_stmt = select(func.count(Notification.id)).where(
+                            Notification.user_id == user.id,
+                            Notification.type == "CHECKOUT_REMINDER",
+                            Notification.created_at >= start_of_today,
+                        )
+                        already_sent = (await session.execute(existing_stmt)).scalar_one() or 0
+                        if already_sent == 0:
+                            if diff_mins > 0:
+                                msg = f"Your scheduled check-out time is {sched_out} ({diff_mins} mins remaining). Please submit your daily checklist and check out!"
+                            elif diff_mins == 0:
+                                msg = f"It's {sched_out} — scheduled end of your shift! Please submit your daily checklist and remember to check out."
+                            else:
+                                msg = f"Your scheduled shift ended at {sched_out}. If you have finished your work, please check out now!"
+
+                            await NotificationService.create(
+                                session=session,
+                                user_id=user.id,
+                                title="Check-out Reminder",
+                                message=msg,
+                                notification_type="CHECKOUT_REMINDER",
+                                link="/attendance",
+                            )
+                            logger.info(f"Sent checkout reminder to {user.full_name} for {sched_out}")
+                except Exception as ex:
+                    logger.warning(f"Error evaluating checkout reminder for user {user.id}: {ex}")
+        except Exception as e:
+            logger.error(f"Error in check_checkout_reminders job: {e}")
+            await session.rollback()
+
+
 def start_scheduler():
-    """Start background scheduler for recurring tasks and daily 10:00 PM backups"""
+    """Start background scheduler for recurring tasks, checkout reminders, and daily 10:00 PM backups"""
     if not scheduler.running:
         # Recurring task runner (every minute)
         scheduler.add_job(
@@ -51,6 +131,15 @@ def start_scheduler():
             "interval",
             minutes=1,
             id="recurring_task_runner",
+            replace_existing=True,
+        )
+
+        # Checkout reminder runner (every minute)
+        scheduler.add_job(
+            check_checkout_reminders,
+            "interval",
+            minutes=1,
+            id="checkout_reminder_runner",
             replace_existing=True,
         )
 

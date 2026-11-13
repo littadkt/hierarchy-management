@@ -20,6 +20,7 @@ import {
   KeyRound,
   ShieldCheck,
   X,
+  FileSpreadsheet,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
@@ -33,6 +34,7 @@ import { TaskDetailModal } from "@/components/TaskDetailModal";
 import { QuickChecklistWidget } from "@/components/QuickChecklistWidget";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
 import { TaskPerformanceWidget } from "@/components/TaskPerformanceWidget";
+import { DownloadReportsModal } from "@/components/DownloadReportsModal";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -47,6 +49,7 @@ export default function DashboardPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isSecurityBannerDismissed, setIsSecurityBannerDismissed] = useState(false);
+  const [isDownloadReportsOpen, setIsDownloadReportsOpen] = useState(false);
 
   const isDefaultAdmin = user?.email === "superadmin@example.com";
 
@@ -210,11 +213,21 @@ export default function DashboardPage() {
             <div className="pt-2 flex items-center gap-2 sm:gap-3 flex-wrap">
               <button
                 onClick={() => setIsCreateTaskOpen(true)}
-                className="px-4 py-2 rounded-xl bg-white text-indigo-700 dark:bg-indigo-600 dark:text-white dark:hover:bg-indigo-500 font-bold text-xs hover:bg-indigo-50 shadow-md transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white text-indigo-700 dark:bg-indigo-600 dark:text-white dark:hover:bg-indigo-500 font-bold text-xs hover:bg-indigo-50 shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 <span>Create Task</span>
               </button>
+              {(user?.role === "SUPER_ADMIN" || user?.role === "ADMIN") && (
+                <button
+                  type="button"
+                  onClick={() => setIsDownloadReportsOpen(true)}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Download Reports</span>
+                </button>
+              )}
               <Link
                 href="/approvals"
                 className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/20 dark:bg-slate-800/80 dark:hover:bg-slate-800 dark:text-slate-200 text-white font-semibold text-xs backdrop-blur-md transition-all flex items-center gap-1.5"
@@ -650,6 +663,12 @@ export default function DashboardPage() {
       <ChangePasswordModal
         isOpen={isChangePasswordOpen}
         onClose={() => setIsChangePasswordOpen(false)}
+      />
+
+      {/* Download Management Reports Modal */}
+      <DownloadReportsModal
+        isOpen={isDownloadReportsOpen}
+        onClose={() => setIsDownloadReportsOpen(false)}
       />
     </ProtectedRoute>
   );

@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -54,6 +54,24 @@ class Attendance(Base):
         nullable=False,
         index=True,
     )
+
+    # Shift Schedule & Buffer Tracking
+    schedule_check_in: Mapped[Optional[str]] = mapped_column(
+        String(8), nullable=True, comment="Scheduled check-in time (HH:MM)"
+    )
+    schedule_check_out: Mapped[Optional[str]] = mapped_column(
+        String(8), nullable=True, comment="Scheduled check-out time (HH:MM)"
+    )
+    is_buffer_used: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="Whether 10-min grace buffer was used"
+    )
+    is_late: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="Whether check-in was late"
+    )
+    late_minutes: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, comment="Minutes late past scheduled check-in"
+    )
+
     check_in_note: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
@@ -62,6 +80,38 @@ class Attendance(Base):
     )
     ip_address: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
+    )
+
+    # Wi-Fi Restriction, Geolocation & Off-Network Approval
+    approval_status: Mapped[str] = mapped_column(
+        String(30), default="APPROVED", nullable=False, index=True, comment="APPROVED, PENDING, REJECTED"
+    )
+    requires_approval: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True, comment="True if checked in outside designated office Wi-Fi"
+    )
+    latitude: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="GPS Latitude"
+    )
+    longitude: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="GPS Longitude"
+    )
+    accuracy: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="GPS Accuracy in meters"
+    )
+    wifi_ssid: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, comment="Connected Wi-Fi SSID reported by client"
+    )
+    approved_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rejection_reason: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -76,5 +126,6 @@ class Attendance(Base):
         nullable=False,
     )
 
-    # Relationship
+    # Relationships
     user: Mapped["User"] = relationship("User", foreign_keys=[user_id], lazy="joined")
+    approved_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[approved_by_id], lazy="joined")

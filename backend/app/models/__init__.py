@@ -1,4 +1,6 @@
+from app.models.notification import Notification
 from app.models.attendance import Attendance, AttendanceStatus
+from app.models.schedule import TimeSchedule
 from app.models.user import Role, User
 from app.models.branch import Branch
 from app.models.department import Department
@@ -27,8 +29,10 @@ from app.models.warranty import (
 )
 
 __all__ = [
+    "Notification",
     "Attendance",
     "AttendanceStatus",
+    "TimeSchedule",
     "Role",
     "User",
     "Branch",

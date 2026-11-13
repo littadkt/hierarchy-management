@@ -43,6 +43,10 @@ import {
   WarrantyStatus,
   UserPermissions,
   WindowDefinition,
+  TimeSchedule,
+  BufferStatus,
+  AppNotification,
+  NotificationListResponse,
 } from "./types";
 
 /**
@@ -187,6 +191,9 @@ export const usersApi = {
     branch?: string | null;
     department?: string | null;
     reports_to_id?: string | null;
+    schedule_id?: string | null;
+    check_in_time?: string | null;
+    check_out_time?: string | null;
   }): Promise<User> => {
     const response = await api.post("/users", data);
     return response.data;
@@ -202,6 +209,9 @@ export const usersApi = {
       branch?: string | null;
       department?: string | null;
       reports_to_id?: string | null;
+      schedule_id?: string | null;
+      check_in_time?: string | null;
+      check_out_time?: string | null;
       can_place_wholesale_orders?: boolean;
     }>
   ): Promise<User> => {
@@ -246,6 +256,8 @@ export const branchesApi = {
     code?: string | null;
     city?: string | null;
     address?: string | null;
+    allowed_wifi_ips?: string | null;
+    wifi_ssid?: string | null;
     is_active?: boolean;
   }): Promise<Branch> => {
     const response = await api.post("/branches", data);
@@ -258,6 +270,8 @@ export const branchesApi = {
       code?: string | null;
       city?: string | null;
       address?: string | null;
+      allowed_wifi_ips?: string | null;
+      wifi_ssid?: string | null;
       is_active: boolean;
     }>
   ): Promise<Branch> => {
@@ -500,7 +514,15 @@ export const tasksApi = {
 };
 
 export const approvalsApi = {
-  getPending: async (params?: { sort_by?: string; order?: string; date?: string }): Promise<Task[]> => {
+  getPending: async (params?: {
+    sort_by?: string;
+    order?: string;
+    date?: string;
+    submitted_by_id?: string;
+    approver_id?: string;
+    priority?: string;
+    submitted_date?: string;
+  }): Promise<Task[]> => {
     const response = await api.get("/approvals/pending", { params });
     return response.data;
   },
@@ -545,8 +567,23 @@ export const statsApi = {
     user_id?: string;
     branch?: string;
     department?: string;
+    start_date?: string;
+    end_date?: string;
   }): Promise<TaskPerformanceStats> => {
     const response = await api.get("/stats/performance", { params });
+    return response.data;
+  },
+  exportPerformanceBlob: async (params?: {
+    user_id?: string;
+    branch?: string;
+    department?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<Blob> => {
+    const response = await api.get("/stats/performance/export", {
+      params,
+      responseType: "blob",
+    });
     return response.data;
   },
 };
@@ -648,6 +685,10 @@ export const purchaseApi = {
     const response = await api.get("/purchase-requests/in-charges");
     return response.data;
   },
+  getManagers: async (): Promise<UserBrief[]> => {
+    const response = await api.get("/purchase-requests/managers");
+    return response.data;
+  },
   assignManager: async (userId: string): Promise<UserBrief> => {
     const response = await api.post("/purchase-requests/assign-manager", { user_id: userId });
     return response.data;
@@ -670,6 +711,8 @@ export const purchaseApi = {
     search?: string;
     sort_by?: string;
     order?: string;
+    date?: string;
+    pm_filter?: string;
     skip?: number;
     limit?: number;
   }): Promise<{ items: PurchaseRequest[]; total: number; skip: number; limit: number }> => {
@@ -1001,8 +1044,31 @@ export const attendanceApi = {
     const response = await api.get("/attendance/today");
     return response.data;
   },
-  checkIn: async (note?: string): Promise<AttendanceRecord> => {
-    const response = await api.post("/attendance/check-in", { note });
+  checkIn: async (
+    payload?:
+      | {
+          note?: string;
+          latitude?: number | null;
+          longitude?: number | null;
+          accuracy?: number | null;
+          wifi_ssid?: string | null;
+        }
+      | string
+  ): Promise<AttendanceRecord> => {
+    const body = typeof payload === "string" ? { note: payload } : payload || {};
+    const response = await api.post("/attendance/check-in", body);
+    return response.data;
+  },
+  getPendingApprovals: async (): Promise<AttendanceRecord[]> => {
+    const response = await api.get("/attendance/pending-approvals");
+    return response.data;
+  },
+  approveCheckIn: async (id: string): Promise<AttendanceRecord> => {
+    const response = await api.post(`/attendance/${id}/approve`);
+    return response.data;
+  },
+  rejectCheckIn: async (id: string, reason?: string): Promise<AttendanceRecord> => {
+    const response = await api.post(`/attendance/${id}/reject`, { reason });
     return response.data;
   },
   checkOut: async (note?: string): Promise<AttendanceRecord> => {
@@ -1044,6 +1110,48 @@ export const attendanceApi = {
       responseType: "blob",
     });
     return response.data;
+  },
+  getBufferStatus: async (userId?: string): Promise<BufferStatus> => {
+    const response = await api.get("/attendance/buffer-status", {
+      params: userId ? { user_id: userId } : undefined,
+    });
+    return response.data;
+  },
+};
+
+export const schedulesApi = {
+  list: async (): Promise<TimeSchedule[]> => {
+    const response = await api.get("/schedules");
+    return response.data;
+  },
+  create: async (data: {
+    name: string;
+    check_in_time: string;
+    check_out_time: string;
+    buffer_minutes?: number;
+    monthly_buffer_limit?: number;
+    description?: string;
+  }): Promise<TimeSchedule> => {
+    const response = await api.post("/schedules", data);
+    return response.data;
+  },
+  update: async (
+    id: string,
+    data: Partial<{
+      name: string;
+      check_in_time: string;
+      check_out_time: string;
+      buffer_minutes: number;
+      monthly_buffer_limit: number;
+      description: string;
+      is_active: boolean;
+    }>
+  ): Promise<TimeSchedule> => {
+    const response = await api.put(`/schedules/${id}`, data);
+    return response.data;
+  },
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/schedules/${id}`);
   },
 };
 
@@ -1255,6 +1363,25 @@ export const permissionsApi = {
   },
   resetUserPermissions: async (userId: string): Promise<UserPermissions> => {
     const response = await api.post(`/permissions/users/${userId}/reset`);
+    return response.data;
+  },
+};
+
+export const notificationsApi = {
+  list: async (params?: { limit?: number; unread_only?: boolean }): Promise<NotificationListResponse> => {
+    const response = await api.get("/notifications", { params });
+    return response.data;
+  },
+  markAsRead: async (id: string): Promise<AppNotification> => {
+    const response = await api.patch(`/notifications/${id}/read`);
+    return response.data;
+  },
+  markAllAsRead: async (): Promise<{ message: string; count: number }> => {
+    const response = await api.post("/notifications/mark-all-read");
+    return response.data;
+  },
+  delete: async (id: string): Promise<{ message: string }> => {
+    const response = await api.delete(`/notifications/${id}`);
     return response.data;
   },
 };

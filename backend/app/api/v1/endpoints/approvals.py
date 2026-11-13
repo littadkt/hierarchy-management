@@ -8,7 +8,7 @@ from sqlalchemy.orm import aliased, selectinload
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models.task import Task, TaskStatus
+from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.user import Role, User
 from app.schemas.approval import ApprovalDecision, SubmitForApproval
 from app.schemas.task import TaskOut
@@ -22,6 +22,10 @@ async def get_pending_approvals(
     sort_by: Optional[str] = Query(None, description="Sort field: 'approver', 'date', 'due_date', 'created_at', 'updated_at'"),
     order: Optional[str] = Query("desc", description="Sort direction: 'asc' or 'desc'"),
     date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD): matches submission date, due date, or created date"),
+    submitted_by_id: Optional[uuid.UUID] = Query(None, description="Filter by user who submitted the task"),
+    approver_id: Optional[uuid.UUID] = Query(None, description="Filter by designated approver ID"),
+    priority: Optional[str] = Query(None, description="Filter by priority: LOW, MEDIUM, HIGH, URGENT"),
+    submitted_date: Optional[str] = Query(None, description="Filter strictly by submission date (YYYY-MM-DD)"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -29,7 +33,7 @@ async def get_pending_approvals(
     List all tasks currently awaiting approval:
     - Super Admin: sees all tasks awaiting approval
     - Approvers: sees tasks where current user is designated approver
-    Supports sorting by designated approver and date, and filtering by date.
+    Supports sorting and filtering by submitted by, priority, submitted date, and designated approver.
     """
     stmt = (
         select(Task)
@@ -46,19 +50,46 @@ async def get_pending_approvals(
 
     if current_user.role != Role.SUPER_ADMIN:
         stmt = stmt.where(Task.approver_id == current_user.id)
+    elif approver_id:
+        stmt = stmt.where(Task.approver_id == approver_id)
 
-    if date and date.strip():
+    if submitted_by_id:
+        stmt = stmt.where(
+            or_(
+                Task.assigned_to_id == submitted_by_id,
+                Task.created_by_id == submitted_by_id,
+            )
+        )
+
+    if priority and priority.strip() and priority.upper() != "ALL":
         try:
-            target_d = datetime.strptime(date.strip(), "%Y-%m-%d").date()
+            p_enum = TaskPriority(priority.strip().upper())
+            stmt = stmt.where(Task.priority == p_enum)
+        except ValueError:
+            pass
+
+    # Submission Date filtering
+    active_date = submitted_date if (submitted_date and submitted_date.strip()) else date
+    if active_date and active_date.strip():
+        try:
+            target_d = datetime.strptime(active_date.strip(), "%Y-%m-%d").date()
             start_dt = datetime.combine(target_d, time.min).replace(tzinfo=timezone.utc)
             end_dt = datetime.combine(target_d, time.max).replace(tzinfo=timezone.utc)
-            stmt = stmt.where(
-                or_(
-                    and_(Task.updated_at >= start_dt, Task.updated_at <= end_dt),
-                    and_(Task.created_at >= start_dt, Task.created_at <= end_dt),
-                    and_(Task.due_date >= start_dt, Task.due_date <= end_dt),
+            if submitted_date and submitted_date.strip():
+                stmt = stmt.where(
+                    or_(
+                        and_(Task.updated_at >= start_dt, Task.updated_at <= end_dt),
+                        and_(Task.created_at >= start_dt, Task.created_at <= end_dt),
+                    )
                 )
-            )
+            else:
+                stmt = stmt.where(
+                    or_(
+                        and_(Task.updated_at >= start_dt, Task.updated_at <= end_dt),
+                        and_(Task.created_at >= start_dt, Task.created_at <= end_dt),
+                        and_(Task.due_date >= start_dt, Task.due_date <= end_dt),
+                    )
+                )
         except ValueError:
             pass
 

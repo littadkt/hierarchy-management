@@ -101,6 +101,68 @@ async def init_models() -> None:
             text("CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_user_date ON attendance_records (user_id, date);")
         )
         await conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS time_schedules (
+                id UUID PRIMARY KEY,
+                name VARCHAR(100) UNIQUE NOT NULL,
+                check_in_time VARCHAR(8) NOT NULL,
+                check_out_time VARCHAR(8) NOT NULL,
+                buffer_minutes INTEGER NOT NULL DEFAULT 10,
+                monthly_buffer_limit INTEGER NOT NULL DEFAULT 3,
+                description VARCHAR(255),
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+        )
+        await conn.execute(
+            text("ALTER TABLE time_schedules ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;")
+        )
+        await conn.execute(
+            text("ALTER TABLE time_schedules ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_time_schedules_name ON time_schedules (name);")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS schedule_id UUID REFERENCES time_schedules(id) ON DELETE SET NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS check_in_time VARCHAR(8);")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS check_out_time VARCHAR(8);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_users_schedule_id ON users (schedule_id);")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS is_buffer_used BOOLEAN DEFAULT FALSE NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS is_late BOOLEAN DEFAULT FALSE NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS late_minutes INTEGER DEFAULT 0 NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS schedule_check_in VARCHAR(8);")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS schedule_check_out VARCHAR(8);")
+        )
+        await conn.execute(
+            text("""
+            INSERT INTO time_schedules (id, name, check_in_time, check_out_time, buffer_minutes, monthly_buffer_limit, description, is_active, created_at, updated_at)
+            VALUES
+                ('a0000000-0000-0000-0000-000000000001', 'General Shift (09:00 AM - 06:00 PM)', '09:00', '18:00', 10, 3, 'Standard 9-hour workday with 10-minute grace buffer (max 3 days/month)', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                ('a0000000-0000-0000-0000-000000000002', 'Morning Shift (08:00 AM - 05:00 PM)', '08:00', '17:00', 10, 3, 'Early morning shift with 10-minute grace buffer (max 3 days/month)', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                ('a0000000-0000-0000-0000-000000000003', 'Late Shift (10:00 AM - 07:00 PM)', '10:00', '19:00', 10, 3, 'Mid-morning shift with 10-minute grace buffer (max 3 days/month)', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (name) DO NOTHING;
+            """)
+        )
+        await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS today_first_login_at TIMESTAMP WITH TIME ZONE;")
         )
         await conn.execute(
@@ -120,6 +182,32 @@ async def init_models() -> None:
         )
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSON DEFAULT '{}';")
+        )
+        await conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id UUID PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                title VARCHAR(255) NOT NULL,
+                message TEXT NOT NULL,
+                type VARCHAR(50) NOT NULL DEFAULT 'SYSTEM',
+                link VARCHAR(255),
+                is_read BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_notifications_is_read ON notifications (is_read);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_notifications_type ON notifications (type);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created_at);")
         )
         await conn.execute(
             text("ALTER TABLE purchase_requests ALTER COLUMN category DROP NOT NULL;")
@@ -201,6 +289,50 @@ async def init_models() -> None:
         )
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_checklist_items_target_user_id ON checklist_items (target_user_id);")
+        )
+
+        # Branch Wi-Fi Restrictions & Attendance Approval/GPS
+        await conn.execute(
+            text("ALTER TABLE branches ADD COLUMN IF NOT EXISTS allowed_wifi_ips VARCHAR(500);")
+        )
+        await conn.execute(
+            text("ALTER TABLE branches ADD COLUMN IF NOT EXISTS wifi_ssid VARCHAR(100);")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS approval_status VARCHAR(30) DEFAULT 'APPROVED' NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN DEFAULT FALSE NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS accuracy DOUBLE PRECISION;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS wifi_ssid VARCHAR(100);")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS approved_by_id UUID REFERENCES users(id) ON DELETE SET NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP WITH TIME ZONE;")
+        )
+        await conn.execute(
+            text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS rejection_reason VARCHAR(255);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_attendance_records_approval_status ON attendance_records (approval_status);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_attendance_records_requires_approval ON attendance_records (requires_approval);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_attendance_records_approved_by_id ON attendance_records (approved_by_id);")
         )
     logger.info("Database tables verified/created successfully.")
 

@@ -138,6 +138,18 @@ class UserService:
             else (creator.department if creator.department else None)
         )
 
+        schedule_id = user_in.schedule_id
+        check_in_time = (
+            user_in.check_in_time.strip()
+            if user_in.check_in_time and user_in.check_in_time.strip()
+            else None
+        )
+        check_out_time = (
+            user_in.check_out_time.strip()
+            if user_in.check_out_time and user_in.check_out_time.strip()
+            else None
+        )
+
         user = User(
             email=user_in.email,
             full_name=user_in.full_name,
@@ -147,6 +159,9 @@ class UserService:
             can_place_wholesale_orders=can_place_wholesale_orders,
             branch=branch,
             department=department,
+            schedule_id=schedule_id,
+            check_in_time=check_in_time,
+            check_out_time=check_out_time,
             reports_to_id=reports_to_id,
             created_by_id=creator.id,
         )
@@ -203,6 +218,15 @@ class UserService:
 
         if user_in.department is not None:
             target.department = user_in.department.strip() if user_in.department and user_in.department.strip() else None
+
+        if hasattr(user_in, "schedule_id") and user_in.schedule_id is not None:
+            target.schedule_id = user_in.schedule_id
+
+        if hasattr(user_in, "check_in_time") and user_in.check_in_time is not None:
+            target.check_in_time = user_in.check_in_time.strip() if user_in.check_in_time.strip() else None
+
+        if hasattr(user_in, "check_out_time") and user_in.check_out_time is not None:
+            target.check_out_time = user_in.check_out_time.strip() if user_in.check_out_time.strip() else None
 
         if user_in.is_on_leave is not None and operator.role in [Role.SUPER_ADMIN, Role.ADMIN]:
             target.is_on_leave = user_in.is_on_leave

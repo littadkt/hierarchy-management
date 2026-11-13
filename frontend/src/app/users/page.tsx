@@ -12,6 +12,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { RoleBadge } from "@/components/RoleBadge";
 import { CreateUserModal } from "@/components/CreateUserModal";
 import { EditUserModal } from "@/components/EditUserModal";
+import { ManageSchedulesModal } from "@/components/ManageSchedulesModal";
 
 export default function UsersPage() {
   const { user } = useAuth();
@@ -22,6 +23,7 @@ export default function UsersPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isManageSchedulesOpen, setIsManageSchedulesOpen] = useState(false);
   const [selectedRole, setSelectedRole] = useState<string>("ALL");
   const [selectedBranch, setSelectedBranch] = useState<string>("ALL");
   const [selectedDepartment, setSelectedDepartment] = useState<string>("ALL");
@@ -277,6 +279,15 @@ export default function UsersPage() {
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             {(user?.role === "SUPER_ADMIN" || user?.role === "ADMIN") && (
               <>
+                <button
+                  type="button"
+                  onClick={() => setIsManageSchedulesOpen(true)}
+                  className="px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 font-semibold text-xs flex items-center gap-2 transition-all shadow-xs cursor-pointer"
+                >
+                  <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  <span>Work Schedules</span>
+                </button>
+
                 <Link
                   href="/branches"
                   className="px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 font-semibold text-xs flex items-center gap-2 transition-all shadow-xs"
@@ -472,7 +483,16 @@ export default function UsersPage() {
                                 Dept: {u.department}
                               </span>
                             )}
-                            {!u.branch && !u.department && u.role !== "SUPER_ADMIN" && (
+                            {u.check_in_time && (
+                              <span
+                                title={`Scheduled Shift: ${u.schedule_name || "Custom"} (${u.check_in_time} - ${u.check_out_time || ""})`}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800"
+                              >
+                                <Clock className="w-2.5 h-2.5 text-indigo-500" />
+                                <span>{u.check_in_time} - {u.check_out_time || ""}</span>
+                              </span>
+                            )}
+                            {!u.branch && !u.department && !u.check_in_time && u.role !== "SUPER_ADMIN" && (
                               <span className="text-[10px] text-slate-400 italic">Unassigned</span>
                             )}
                           </div>
@@ -700,6 +720,13 @@ export default function UsersPage() {
           </div>
         </div>
       )}
+
+      {/* Manage Schedules Modal */}
+      <ManageSchedulesModal
+        isOpen={isManageSchedulesOpen}
+        onClose={() => setIsManageSchedulesOpen(false)}
+        onSchedulesUpdated={loadUsers}
+      />
     </ProtectedRoute>
   );
 }

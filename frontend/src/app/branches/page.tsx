@@ -13,6 +13,7 @@ import {
   XCircle,
   X,
   Users,
+  Wifi,
 } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
@@ -38,6 +39,8 @@ export default function BranchesPage() {
   const [formCode, setFormCode] = useState("");
   const [formCity, setFormCity] = useState("");
   const [formAddress, setFormAddress] = useState("");
+  const [formAllowedWifiIps, setFormAllowedWifiIps] = useState("");
+  const [formWifiSsid, setFormWifiSsid] = useState("");
   const [formIsActive, setFormIsActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -73,6 +76,8 @@ export default function BranchesPage() {
     setFormCode("");
     setFormCity("");
     setFormAddress("");
+    setFormAllowedWifiIps("");
+    setFormWifiSsid("");
     setFormIsActive(true);
     setFormError(null);
     setIsModalOpen(true);
@@ -84,6 +89,8 @@ export default function BranchesPage() {
     setFormCode(branch.code || "");
     setFormCity(branch.city || "");
     setFormAddress(branch.address || "");
+    setFormAllowedWifiIps(branch.allowed_wifi_ips || "");
+    setFormWifiSsid(branch.wifi_ssid || "");
     setFormIsActive(branch.is_active);
     setFormError(null);
     setIsModalOpen(true);
@@ -106,6 +113,8 @@ export default function BranchesPage() {
           code: formCode.trim() ? formCode.trim().toUpperCase() : null,
           city: formCity.trim() || null,
           address: formAddress.trim() || null,
+          allowed_wifi_ips: formAllowedWifiIps.trim() || null,
+          wifi_ssid: formWifiSsid.trim() || null,
           is_active: formIsActive,
         });
       } else {
@@ -114,6 +123,8 @@ export default function BranchesPage() {
           code: formCode.trim() ? formCode.trim().toUpperCase() : undefined,
           city: formCity.trim() || undefined,
           address: formAddress.trim() || undefined,
+          allowed_wifi_ips: formAllowedWifiIps.trim() || undefined,
+          wifi_ssid: formWifiSsid.trim() || undefined,
           is_active: formIsActive,
         });
       }
@@ -447,6 +458,47 @@ export default function BranchesPage() {
                     placeholder="e.g. Infopark, Kakkanad, Kochi"
                     className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
+                </div>
+
+                {/* Office Wi-Fi & IP Restrictions */}
+                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700/60 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Wifi className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Office Wi-Fi & Network Restriction
+                    </h4>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                    Employees checking in outside this Wi-Fi network/IP will automatically require Admin approval with GPS coordinates.
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                        Office Wi-Fi SSID (Name)
+                      </label>
+                      <input
+                        type="text"
+                        value={formWifiSsid}
+                        onChange={(e) => setFormWifiSsid(e.target.value)}
+                        placeholder="e.g. Littad-Office-WiFi"
+                        className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                        Allowed Wi-Fi IP / Subnet (CIDR)
+                      </label>
+                      <input
+                        type="text"
+                        value={formAllowedWifiIps}
+                        onChange={(e) => setFormAllowedWifiIps(e.target.value)}
+                        placeholder="e.g. 192.168.1.0/24, 103.45.67.89, 127.0.0.1"
+                        className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 pt-2">

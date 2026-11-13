@@ -67,6 +67,8 @@ class BranchService:
             code=clean_code,
             city=branch_in.city.strip() if branch_in.city and branch_in.city.strip() else None,
             address=branch_in.address.strip() if branch_in.address and branch_in.address.strip() else None,
+            allowed_wifi_ips=branch_in.allowed_wifi_ips.strip() if branch_in.allowed_wifi_ips and branch_in.allowed_wifi_ips.strip() else None,
+            wifi_ssid=branch_in.wifi_ssid.strip() if branch_in.wifi_ssid and branch_in.wifi_ssid.strip() else None,
             is_active=branch_in.is_active,
         )
         session.add(branch)
@@ -118,6 +120,12 @@ class BranchService:
 
         if branch_in.address is not None:
             branch.address = branch_in.address.strip() if branch_in.address.strip() else None
+
+        if branch_in.allowed_wifi_ips is not None:
+            branch.allowed_wifi_ips = branch_in.allowed_wifi_ips.strip() if branch_in.allowed_wifi_ips.strip() else None
+
+        if branch_in.wifi_ssid is not None:
+            branch.wifi_ssid = branch_in.wifi_ssid.strip() if branch_in.wifi_ssid.strip() else None
 
         if branch_in.is_active is not None:
             branch.is_active = branch_in.is_active

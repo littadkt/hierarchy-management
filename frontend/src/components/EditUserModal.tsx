@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { X, UserCheck, AlertCircle, Plus } from "lucide-react";
-import { usersApi, branchesApi, departmentsApi, getErrorMessage } from "@/lib/api";
-import { Branch, Department, Role, User } from "@/lib/types";
+import { X, UserCheck, AlertCircle, Plus, Clock } from "lucide-react";
+import { usersApi, branchesApi, departmentsApi, schedulesApi, getErrorMessage } from "@/lib/api";
+import { Branch, Department, Role, TimeSchedule, User } from "@/lib/types";
 
 interface EditUserModalProps {
   user: User | null;
@@ -36,6 +36,17 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
   const [newDeptName, setNewDeptName] = useState("");
   const [quickCreatingDept, setQuickCreatingDept] = useState(false);
 
+  // Time Schedule & Custom Check-in/out State
+  const [schedules, setSchedules] = useState<TimeSchedule[]>([]);
+  const [selectedScheduleId, setSelectedScheduleId] = useState("");
+  const [checkInTime, setCheckInTime] = useState("");
+  const [checkOutTime, setCheckOutTime] = useState("");
+  const [showQuickAddSchedule, setShowQuickAddSchedule] = useState(false);
+  const [newScheduleName, setNewScheduleName] = useState("");
+  const [newSchedInTime, setNewSchedInTime] = useState("09:00");
+  const [newSchedOutTime, setNewSchedOutTime] = useState("18:00");
+  const [quickCreatingSchedule, setQuickCreatingSchedule] = useState(false);
+
   const [isActive, setIsActive] = useState<boolean>(true);
   const [canPlaceOrders, setCanPlaceOrders] = useState<boolean>(false);
 
@@ -49,10 +60,37 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
     if (isOpen) {
       branchesApi.list(true).then(setBranches).catch(() => {});
       departmentsApi.list(true).then(setDepartments).catch(() => {});
+      schedulesApi
+        .list()
+        .then((data) => {
+          setSchedules(data);
+          if (user) {
+            let schedId = user.schedule_id || "";
+            if (!schedId && user.check_in_time) {
+              const matched = data.find((s) => s.check_in_time === user.check_in_time);
+              if (matched) schedId = matched.id;
+            }
+            if (!schedId && data.length > 0) {
+              const defaultSched = data.find((s) => s.name.toLowerCase().includes("general")) || data[0];
+              schedId = defaultSched.id;
+            }
+            if (schedId) {
+              setSelectedScheduleId(schedId);
+              const found = data.find((s) => s.id === schedId);
+              if (found) {
+                setCheckInTime(found.check_in_time);
+                setCheckOutTime(found.check_out_time);
+              }
+            }
+          }
+        })
+        .catch(() => {});
       setShowQuickAddBranch(false);
       setNewBranchName("");
       setShowQuickAddDept(false);
       setNewDeptName("");
+      setShowQuickAddSchedule(false);
+      setNewScheduleName("");
     }
     if (user) {
       setFullName(user.full_name);
@@ -61,11 +99,52 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
       setRole(user.role);
       setBranch(user.branch || "");
       setDepartment(user.department || "");
+      setSelectedScheduleId(user.schedule_id || "");
+      setCheckInTime(user.check_in_time || "");
+      setCheckOutTime(user.check_out_time || "");
       setIsActive(user.is_active);
       setCanPlaceOrders(!!user.can_place_wholesale_orders);
       setError(null);
     }
   }, [user, isOpen]);
+
+  const handleScheduleSelect = (schedId: string) => {
+    setSelectedScheduleId(schedId);
+    if (!schedId) {
+      setCheckInTime("");
+      setCheckOutTime("");
+      return;
+    }
+    const found = schedules.find((s) => s.id === schedId);
+    if (found) {
+      setCheckInTime(found.check_in_time);
+      setCheckOutTime(found.check_out_time);
+    }
+  };
+
+  const handleQuickCreateSchedule = async () => {
+    if (!newScheduleName.trim() || !newSchedInTime || !newSchedOutTime) return;
+    setQuickCreatingSchedule(true);
+    try {
+      const created = await schedulesApi.create({
+        name: newScheduleName.trim(),
+        check_in_time: newSchedInTime,
+        check_out_time: newSchedOutTime,
+        buffer_minutes: 10,
+        monthly_buffer_limit: 3,
+      });
+      setSchedules((prev) => [...prev, created]);
+      setSelectedScheduleId(created.id);
+      setCheckInTime(created.check_in_time);
+      setCheckOutTime(created.check_out_time);
+      setNewScheduleName("");
+      setShowQuickAddSchedule(false);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setQuickCreatingSchedule(false);
+    }
+  };
 
   const handleQuickCreateBranch = async () => {
     if (!newBranchName.trim()) return;
@@ -246,6 +325,18 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
         payload.password = password.trim();
       }
 
+      if (canManageOrganizational) {
+        if (!selectedScheduleId) {
+          setError("Please select a check-in and check-out schedule.");
+          setLoading(false);
+          return;
+        }
+        const selectedSched = schedules.find((s) => s.id === selectedScheduleId);
+        payload.schedule_id = selectedScheduleId;
+        payload.check_in_time = selectedSched ? selectedSched.check_in_time : checkInTime || null;
+        payload.check_out_time = selectedSched ? selectedSched.check_out_time : checkOutTime || null;
+      }
+
       if (isSuperAdmin) {
         payload.role = role;
         payload.is_active = isActive;
@@ -419,6 +510,105 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
                 </label>
               </div>
             </>
+          )}
+
+          {/* Check-in & Check-out Schedule Select */}
+          {canManageOrganizational && (
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Check-in & Check-out Schedule *</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowQuickAddSchedule(!showQuickAddSchedule)}
+                  className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>{showQuickAddSchedule ? "Select Existing" : "+ New Schedule"}</span>
+                </button>
+              </div>
+
+              {showQuickAddSchedule ? (
+                <div className="p-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20 space-y-2">
+                  <input
+                    type="text"
+                    placeholder="Schedule name (e.g. Night Shift)"
+                    value={newScheduleName}
+                    onChange={(e) => setNewScheduleName(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-0.5 font-medium">Check-in Time</label>
+                      <input
+                        type="time"
+                        value={newSchedInTime}
+                        onChange={(e) => setNewSchedInTime(e.target.value)}
+                        className="w-full px-2 py-1 text-xs rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-0.5 font-medium">Check-out Time</label>
+                      <input
+                        type="time"
+                        value={newSchedOutTime}
+                        onChange={(e) => setNewSchedOutTime(e.target.value)}
+                        className="w-full px-2 py-1 text-xs rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={handleQuickCreateSchedule}
+                      disabled={quickCreatingSchedule || !newScheduleName.trim()}
+                      className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 cursor-pointer"
+                    >
+                      {quickCreatingSchedule ? "Saving..." : "Save Schedule"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <select
+                  required
+                  value={selectedScheduleId}
+                  onChange={(e) => handleScheduleSelect(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                >
+                  <option value="">-- Select Check-in & Check-out Schedule * --</option>
+                  {schedules.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.check_in_time} - {s.check_out_time})
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {/* Active Schedule Info Banner */}
+              {selectedScheduleId && !showQuickAddSchedule && (
+                (() => {
+                  const s = schedules.find((item) => item.id === selectedScheduleId);
+                  if (!s) return null;
+                  return (
+                    <div className="p-2.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-3.5 h-3.5 text-indigo-500" />
+                        <span className="font-semibold text-slate-800 dark:text-slate-200">{s.name}</span>
+                      </div>
+                      <div className="font-mono text-indigo-600 dark:text-indigo-400 font-bold text-xs">
+                        {s.check_in_time} – {s.check_out_time}
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+
+              <p className="text-[10px] text-slate-400">
+                10-minute grace buffer applies (max 3 days/month). Late check-in beyond buffer is marked as Half Day Leave.
+              </p>
+            </div>
           )}
 
           <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">

@@ -9,6 +9,8 @@ class BranchBase(BaseModel):
     code: Optional[str] = Field(None, max_length=20)
     city: Optional[str] = Field(None, max_length=100)
     address: Optional[str] = Field(None, max_length=255)
+    allowed_wifi_ips: Optional[str] = Field(None, max_length=500, description="Allowed Wi-Fi IP addresses or CIDR subnets (comma-separated)")
+    wifi_ssid: Optional[str] = Field(None, max_length=100, description="Office Wi-Fi SSID name")
     is_active: bool = True
 
 
@@ -21,6 +23,8 @@ class BranchUpdate(BaseModel):
     code: Optional[str] = Field(None, max_length=20)
     city: Optional[str] = Field(None, max_length=100)
     address: Optional[str] = Field(None, max_length=255)
+    allowed_wifi_ips: Optional[str] = Field(None, max_length=500)
+    wifi_ssid: Optional[str] = Field(None, max_length=100)
     is_active: Optional[bool] = None
 
 

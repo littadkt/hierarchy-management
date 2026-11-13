@@ -1,3 +1,5 @@
+import io
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 import uuid
@@ -5,6 +7,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+logger = logging.getLogger(__name__)
 
 from app.core.permissions import (
     HierarchyPermissionError,
@@ -227,6 +233,22 @@ class TaskService:
             "assigned_to_id": str(task.assigned_to_id) if task.assigned_to_id else None,
             "status": str(task.status.value if hasattr(task.status, "value") else task.status),
         })
+
+        # Send notification to assignee if assigned to someone else
+        if task.assigned_to_id and task.assigned_to_id != creator.id:
+            try:
+                from app.services.notification_service import NotificationService
+                await NotificationService.create(
+                    session=session,
+                    user_id=task.assigned_to_id,
+                    title="New Task Assigned",
+                    message=f"{creator.full_name} assigned you a new task: '{task.title}'",
+                    notification_type="TASK_ASSIGNED",
+                    link="/tasks",
+                )
+            except Exception as ex:
+                logger.warning(f"Failed to send task assignment notification: {ex}")
+
         return created_task
 
     @staticmethod
@@ -426,6 +448,8 @@ class TaskService:
         user_id: Optional[uuid.UUID] = None,
         branch: Optional[str] = None,
         department: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Calculate comprehensive task and subtask performance metrics scoped by hierarchy.
@@ -524,12 +548,42 @@ class TaskService:
                 scope_label = "branch"
 
         # Apply specific filters if requested
+        target_user = None
         if user_id:
+            target_user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+            if target_user:
+                scope_label = f"User: {target_user.full_name}"
             stmt = stmt.where(Task.assigned_to_id == user_id)
         if branch:
-            stmt = stmt.join(Task.assigned_to).where(func.lower(func.trim(User.branch)) == branch.strip().lower())
+            stmt = stmt.where(Task.assigned_to.has(func.lower(func.trim(User.branch)) == branch.strip().lower()))
         if department:
-            stmt = stmt.join(Task.assigned_to).where(func.lower(func.trim(User.department)) == department.strip().lower())
+            stmt = stmt.where(Task.assigned_to.has(func.lower(func.trim(User.department)) == department.strip().lower()))
+
+        if start_date:
+            try:
+                s_d = datetime.strptime(start_date.strip(), "%Y-%m-%d")
+                s_dt = datetime(s_d.year, s_d.month, s_d.day, 0, 0, 0, tzinfo=timezone.utc)
+                stmt = stmt.where(
+                    or_(
+                        Task.due_date >= s_dt,
+                        and_(Task.due_date == None, Task.created_at >= s_dt),
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Invalid start_date '{start_date}': {e}")
+
+        if end_date:
+            try:
+                e_d = datetime.strptime(end_date.strip(), "%Y-%m-%d")
+                e_dt = datetime(e_d.year, e_d.month, e_d.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
+                stmt = stmt.where(
+                    or_(
+                        Task.due_date <= e_dt,
+                        and_(Task.due_date == None, Task.created_at <= e_dt),
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Invalid end_date '{end_date}': {e}")
 
         res = await session.execute(stmt)
         tasks = list(res.scalars().all())
@@ -621,6 +675,23 @@ class TaskService:
                     if st.is_completed:
                         u["subtasks_completed"] += 1
 
+        if target_user and target_user.id not in user_map:
+            user_map[target_user.id] = {
+                "user_id": str(target_user.id),
+                "full_name": target_user.full_name,
+                "role": target_user.role.value if hasattr(target_user.role, "value") else str(target_user.role),
+                "branch": target_user.branch,
+                "department": target_user.department,
+                "tasks_assigned": 0,
+                "tasks_completed": 0,
+                "tasks_in_progress": 0,
+                "tasks_pending": 0,
+                "tasks_overdue": 0,
+                "tasks_cancelled": 0,
+                "subtasks_total": 0,
+                "subtasks_completed": 0,
+            }
+
         team_performance = []
         for entry in user_map.values():
             u_act = entry["tasks_assigned"] - entry["tasks_cancelled"]
@@ -658,6 +729,8 @@ class TaskService:
 
         return {
             "scope": scope_label,
+            "start_date": start_date,
+            "end_date": end_date,
             "overall_performance_score": overall_performance_score,
             "task_metrics": {
                 "total_tasks": total_tasks,
@@ -682,6 +755,361 @@ class TaskService:
         }
 
     @staticmethod
+    async def export_performance_report_excel(
+        session: AsyncSession,
+        current_user: User,
+        user_id: Optional[uuid.UUID] = None,
+        branch: Optional[str] = None,
+        department: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> bytes:
+        """
+        Generates a professionally styled 2-sheet Excel report:
+        Sheet 1: Performance Summary & Team Breakdown
+        Sheet 2: Granular Task Milestones & Subtask Checklist Details
+        """
+        stats = await TaskService.get_performance_stats(
+            session=session,
+            current_user=current_user,
+            user_id=user_id,
+            branch=branch,
+            department=department,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        # Build query for matching tasks in scope to display detailed breakdown in Sheet 2
+        stmt = (
+            select(Task)
+            .options(
+                selectinload(Task.subtasks),
+                selectinload(Task.assigned_to),
+                selectinload(Task.created_by),
+                selectinload(Task.approver),
+            )
+        )
+
+        if current_user.role == Role.STAFF:
+            stmt = stmt.where(
+                or_(
+                    Task.assigned_to_id == current_user.id,
+                    Task.created_by_id == current_user.id,
+                )
+            )
+        elif current_user.role == Role.TEAM_LEADER:
+            tl_dept = (current_user.department or "").strip()
+            tl_branch = (current_user.branch or "").strip()
+            staff_ids_stmt = select(User.id).where(User.role == Role.STAFF)
+            if tl_dept:
+                staff_ids_stmt = staff_ids_stmt.where(
+                    or_(
+                        func.lower(func.trim(User.department)) == tl_dept.lower(),
+                        User.reports_to_id == current_user.id,
+                    )
+                )
+                if tl_branch:
+                    staff_ids_stmt = staff_ids_stmt.where(
+                        or_(
+                            User.branch == None,
+                            func.lower(func.trim(User.branch)) == tl_branch.lower(),
+                            User.reports_to_id == current_user.id,
+                        )
+                    )
+            else:
+                staff_ids_stmt = staff_ids_stmt.where(User.reports_to_id == current_user.id)
+            stmt = stmt.where(
+                or_(
+                    Task.assigned_to_id == current_user.id,
+                    Task.created_by_id == current_user.id,
+                    Task.approver_id == current_user.id,
+                    Task.assigned_to_id.in_(staff_ids_stmt),
+                )
+            )
+        elif current_user.role == Role.IN_CHARGE:
+            ic_dept = (current_user.department or "").strip()
+            ic_branch = (current_user.branch or "").strip()
+            sub_ids_stmt = select(User.id).where(User.role.in_([Role.TEAM_LEADER, Role.STAFF]))
+            if ic_dept:
+                sub_ids_stmt = sub_ids_stmt.where(
+                    or_(
+                        func.lower(func.trim(User.department)) == ic_dept.lower(),
+                        User.reports_to_id == current_user.id,
+                    )
+                )
+                if ic_branch:
+                    sub_ids_stmt = sub_ids_stmt.where(
+                        or_(
+                            User.branch == None,
+                            func.lower(func.trim(User.branch)) == ic_branch.lower(),
+                            User.reports_to_id == current_user.id,
+                        )
+                    )
+            else:
+                sub_ids_stmt = sub_ids_stmt.where(User.reports_to_id == current_user.id)
+            stmt = stmt.where(
+                or_(
+                    Task.assigned_to_id == current_user.id,
+                    Task.created_by_id == current_user.id,
+                    Task.approver_id == current_user.id,
+                    Task.assigned_to_id.in_(sub_ids_stmt),
+                )
+            )
+
+        if user_id:
+            stmt = stmt.where(Task.assigned_to_id == user_id)
+        if branch:
+            stmt = stmt.where(Task.assigned_to.has(func.lower(func.trim(User.branch)) == branch.strip().lower()))
+        if department:
+            stmt = stmt.where(Task.assigned_to.has(func.lower(func.trim(User.department)) == department.strip().lower()))
+
+        if start_date:
+            try:
+                s_d = datetime.strptime(start_date.strip(), "%Y-%m-%d")
+                s_dt = datetime(s_d.year, s_d.month, s_d.day, 0, 0, 0, tzinfo=timezone.utc)
+                stmt = stmt.where(
+                    or_(
+                        Task.due_date >= s_dt,
+                        and_(Task.due_date == None, Task.created_at >= s_dt),
+                    )
+                )
+            except Exception:
+                pass
+
+        if end_date:
+            try:
+                e_d = datetime.strptime(end_date.strip(), "%Y-%m-%d")
+                e_dt = datetime(e_d.year, e_d.month, e_d.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
+                stmt = stmt.where(
+                    or_(
+                        Task.due_date <= e_dt,
+                        and_(Task.due_date == None, Task.created_at <= e_dt),
+                    )
+                )
+            except Exception:
+                pass
+
+        stmt = stmt.order_by(desc(Task.created_at)).limit(3000)
+        tasks_res = await session.execute(stmt)
+        detailed_tasks = list(tasks_res.scalars().all())
+
+        wb = Workbook()
+
+        # Styles
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        title_font = Font(name="Calibri", size=14, bold=True, color="1E1B4B")
+        sub_font = Font(name="Calibri", size=10, bold=False, color="64748B")
+        bold_font = Font(name="Calibri", size=11, bold=True)
+        indigo_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")
+        center_align = Alignment(horizontal="center", vertical="center")
+        left_align = Alignment(horizontal="left", vertical="center")
+        thin_border = Border(
+            left=Side(style="thin", color="E2E8F0"),
+            right=Side(style="thin", color="E2E8F0"),
+            top=Side(style="thin", color="E2E8F0"),
+            bottom=Side(style="thin", color="E2E8F0"),
+        )
+
+        # -------------------------------------------------------------
+        # SHEET 1: Summary & Team Breakdown
+        # -------------------------------------------------------------
+        ws_sum = wb.active
+        ws_sum.title = "Performance Overview"
+
+        # Report Header
+        ws_sum.append(["Task & Subtask Performance Analytics Report"])
+        ws_sum.cell(row=1, column=1).font = title_font
+
+        date_range_label = f"Period: {start_date or 'All Time'} to {end_date or 'Present'}"
+        scope_display = f"Scope: {stats['scope'].upper()}"
+        generated_info = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} by {current_user.full_name} ({current_user.role.value if hasattr(current_user.role, 'value') else current_user.role})"
+        ws_sum.append([f"{date_range_label}  |  {scope_display}  |  {generated_info}"])
+        ws_sum.cell(row=2, column=1).font = sub_font
+        ws_sum.append([])  # blank row
+
+        # KPI Metrics Table
+        ws_sum.append(["KEY PERFORMANCE INDICATORS (KPIs)", "METRIC VALUE", "DESCRIPTION / CONTEXT"])
+        kpi_header_row = ws_sum.max_row
+        for col_idx in range(1, 4):
+            c = ws_sum.cell(row=kpi_header_row, column=col_idx)
+            c.font = header_font
+            c.fill = indigo_fill
+            c.alignment = center_align
+
+        kpi_data = [
+            ("Overall Composite Performance Score", f"{stats['overall_performance_score']}%", "Composite 50% task milestones + 50% subtask checklists"),
+            ("Total Tasks in Scope", stats["task_metrics"]["total_tasks"], "Primary tasks assigned in scope"),
+            ("Completed Tasks", stats["task_metrics"]["completed_tasks"], "Milestones marked completed"),
+            ("Task Completion Rate", f"{stats['task_metrics']['task_completion_rate']}%", "Ratio of completed tasks to active tasks"),
+            ("In-Progress Tasks", stats["task_metrics"]["in_progress_tasks"], "Tasks currently active and being worked on"),
+            ("Pending Tasks", stats["task_metrics"]["pending_tasks"] + stats["task_metrics"]["pending_approval_tasks"], "Tasks pending execution or managerial approval"),
+            ("Overdue Tasks", stats["task_metrics"]["overdue_tasks"], "Uncompleted tasks past their due date"),
+            ("On-Time Completed Tasks", stats["task_metrics"]["on_time_completed_tasks"], "Tasks completed on or before due date"),
+            ("On-Time Delivery Rate", f"{stats['task_metrics']['on_time_rate']}%", "Punctuality health of completed deliverables"),
+            ("Total Subtask Checklists", stats["subtask_metrics"]["total_subtasks"], "Actionable subtask checklist items"),
+            ("Completed Subtasks", stats["subtask_metrics"]["completed_subtasks"], "Subtask checklist items checked off"),
+            ("Subtask Checklist Completion Rate", f"{stats['subtask_metrics']['subtask_completion_rate']}%", "Checklist completion efficiency"),
+            ("Average Subtasks per Task", stats["subtask_metrics"]["avg_subtasks_per_task"], "Task decomposition granularity"),
+        ]
+
+        for item, val, desc_txt in kpi_data:
+            ws_sum.append([item, val, desc_txt])
+            curr_r = ws_sum.max_row
+            ws_sum.cell(row=curr_r, column=1).alignment = left_align
+            ws_sum.cell(row=curr_r, column=1).font = bold_font
+            ws_sum.cell(row=curr_r, column=2).alignment = center_align
+            ws_sum.cell(row=curr_r, column=2).font = bold_font
+            ws_sum.cell(row=curr_r, column=3).alignment = left_align
+            for c_idx in range(1, 4):
+                ws_sum.cell(row=curr_r, column=c_idx).border = thin_border
+
+        ws_sum.append([])  # blank row
+
+        # Team Member Performance Breakdown
+        ws_sum.append(["TEAM MEMBER PERFORMANCE BREAKDOWN"])
+        ws_sum.cell(row=ws_sum.max_row, column=1).font = Font(name="Calibri", size=12, bold=True, color="1E1B4B")
+
+        member_headers = [
+            "Team Member",
+            "Role",
+            "Branch",
+            "Department",
+            "Composite Score",
+            "Tasks Assigned",
+            "Tasks Completed",
+            "Task Rate",
+            "In Progress",
+            "Pending",
+            "Overdue",
+            "Subtasks Total",
+            "Subtasks Completed",
+            "Subtask Rate",
+        ]
+        ws_sum.append(member_headers)
+        member_hdr_row = ws_sum.max_row
+        for col_idx in range(1, len(member_headers) + 1):
+            c = ws_sum.cell(row=member_hdr_row, column=col_idx)
+            c.font = header_font
+            c.fill = indigo_fill
+            c.alignment = center_align
+
+        for m in stats["team_performance"]:
+            m_row = [
+                m["full_name"],
+                m["role"].replace("_", " "),
+                m["branch"] or "—",
+                m["department"] or "—",
+                f"{m['overall_performance_score']}%",
+                m["tasks_assigned"],
+                m["tasks_completed"],
+                f"{m['task_completion_rate']}%",
+                m["tasks_in_progress"],
+                m["tasks_pending"],
+                m["tasks_overdue"],
+                m["subtasks_total"],
+                m["subtasks_completed"],
+                f"{m['subtask_completion_rate']}%",
+            ]
+            ws_sum.append(m_row)
+            curr_r = ws_sum.max_row
+            for c_idx in range(1, len(m_row) + 1):
+                cell = ws_sum.cell(row=curr_r, column=c_idx)
+                cell.border = thin_border
+                cell.alignment = center_align if c_idx >= 5 else left_align
+
+        for col in ws_sum.columns:
+            max_len = max(len(str(cell.value or "")) for cell in col)
+            col_letter = col[0].column_letter
+            ws_sum.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+        # -------------------------------------------------------------
+        # SHEET 2: Task Milestones & Checklist Details
+        # -------------------------------------------------------------
+        ws_tasks = wb.create_sheet(title="Task & Checklist Log")
+
+        task_headers = [
+            "Task Title",
+            "Assignee Name",
+            "Role",
+            "Branch",
+            "Department",
+            "Created By",
+            "Priority",
+            "Status",
+            "Due Date",
+            "Completed At",
+            "Delivery Health",
+            "Subtasks Total",
+            "Subtasks Checked",
+            "Checklist %",
+            "Approval Required",
+            "Recurring",
+        ]
+        ws_tasks.append(task_headers)
+        for col_idx in range(1, len(task_headers) + 1):
+            c = ws_tasks.cell(row=1, column=col_idx)
+            c.font = header_font
+            c.fill = indigo_fill
+            c.alignment = center_align
+
+        now_utc = datetime.now(timezone.utc)
+        for t in detailed_tasks:
+            assignee = t.assigned_to
+            u_name = assignee.full_name if assignee else "—"
+            u_role = assignee.role.value if assignee and hasattr(assignee.role, "value") else (str(assignee.role) if assignee else "—")
+            u_branch = assignee.branch if assignee and assignee.branch else "—"
+            u_dept = assignee.department if assignee and assignee.department else "—"
+            creator_name = t.created_by.full_name if t.created_by else "—"
+            due_str = t.due_date.strftime("%Y-%m-%d %I:%M %p") if t.due_date else "—"
+            comp_str = t.completed_at.strftime("%Y-%m-%d %I:%M %p") if t.completed_at else "—"
+
+            if t.status == TaskStatus.COMPLETED:
+                delivery_health = "On-Time" if (not t.due_date or not t.completed_at or t.completed_at <= t.due_date) else "Completed Late"
+            elif t.due_date and t.due_date < now_utc and t.status != TaskStatus.CANCELLED:
+                delivery_health = "Overdue"
+            else:
+                delivery_health = t.status.value
+
+            st_total = len(t.subtasks) if t.subtasks else 0
+            st_done = sum(1 for s in t.subtasks if s.is_completed) if t.subtasks else 0
+            st_rate = f"{round((st_done / st_total * 100), 1)}%" if st_total > 0 else ("100%" if t.status == TaskStatus.COMPLETED else "0%")
+
+            row = [
+                t.title,
+                u_name,
+                u_role.replace("_", " "),
+                u_branch,
+                u_dept,
+                creator_name,
+                t.priority.value,
+                t.status.value,
+                due_str,
+                comp_str,
+                delivery_health,
+                st_total,
+                st_done,
+                st_rate,
+                "Yes" if t.requires_approval else "No",
+                "Yes" if t.is_recurring else "No",
+            ]
+            ws_tasks.append(row)
+            curr_r = ws_tasks.max_row
+            for c_idx in range(1, len(row) + 1):
+                cell = ws_tasks.cell(row=curr_r, column=c_idx)
+                cell.border = thin_border
+                cell.alignment = center_align if c_idx >= 7 else left_align
+
+        for col in ws_tasks.columns:
+            max_len = max(len(str(cell.value or "")) for cell in col)
+            col_letter = col[0].column_letter
+            ws_tasks.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+        out_io = io.BytesIO()
+        wb.save(out_io)
+        out_io.seek(0)
+        return out_io.getvalue()
+
+    @staticmethod
     async def update_task(
         session: AsyncSession,
         operator: User,
@@ -697,6 +1125,7 @@ class TaskService:
 
         validate_can_edit_or_delete_task(operator, task, action="edit")
 
+        old_assignee_id = task.assigned_to_id
         changes = []
 
         if task_in.title is not None and task_in.title != task.title:
@@ -866,6 +1295,22 @@ class TaskService:
             "assigned_to_id": str(task.assigned_to_id) if task.assigned_to_id else None,
             "status": str(task.status.value if hasattr(task.status, "value") else task.status),
         })
+
+        # Send notification to new assignee on reassignment
+        if old_assignee_id != task.assigned_to_id and task.assigned_to_id and task.assigned_to_id != operator.id:
+            try:
+                from app.services.notification_service import NotificationService
+                await NotificationService.create(
+                    session=session,
+                    user_id=task.assigned_to_id,
+                    title="Task Assigned to You",
+                    message=f"{operator.full_name} assigned you the task: '{task.title}'",
+                    notification_type="TASK_ASSIGNED",
+                    link="/tasks",
+                )
+            except Exception as ex:
+                logger.warning(f"Failed to send task reassignment notification: {ex}")
+
         return updated_task
 
     @staticmethod
@@ -1316,6 +1761,22 @@ class TaskService:
             "type": "TASK",
             "status": "PENDING_APPROVAL",
         })
+
+        # Send notification to designated approver
+        if task.approver_id and task.approver_id != operator.id:
+            try:
+                from app.services.notification_service import NotificationService
+                await NotificationService.create(
+                    session=session,
+                    user_id=task.approver_id,
+                    title="Task Approval Requested",
+                    message=f"{operator.full_name} submitted task '{task.title}' for your approval.",
+                    notification_type="APPROVAL_REQUESTED",
+                    link="/approvals",
+                )
+            except Exception as ex:
+                logger.warning(f"Failed to send approval requested notification: {ex}")
+
         return updated_task
 
     @staticmethod
@@ -1417,6 +1878,35 @@ class TaskService:
             "decision": decision.action.value if hasattr(decision.action, "value") else str(decision.action),
             "status": str(task.status.value if hasattr(task.status, "value") else task.status),
         })
+
+        # Send notification to task assignee
+        notify_users = set()
+        if task.assigned_to_id and task.assigned_to_id != operator.id:
+            notify_users.add(task.assigned_to_id)
+        if task.created_by_id and task.created_by_id != operator.id:
+            notify_users.add(task.created_by_id)
+
+        for u_id in notify_users:
+            try:
+                from app.services.notification_service import NotificationService
+                if decision.action == ApprovalAction.APPROVE:
+                    n_title = "Task Approved"
+                    n_msg = f"Your task '{task.title}' was approved by {operator.full_name}."
+                else:
+                    n_title = "Task Approval Rejected"
+                    reason = f" Reason: {decision.comments}" if decision.comments else ""
+                    n_msg = f"Your task '{task.title}' was returned to In Progress by {operator.full_name}.{reason}"
+                await NotificationService.create(
+                    session=session,
+                    user_id=u_id,
+                    title=n_title,
+                    message=n_msg,
+                    notification_type="APPROVAL_DECIDED",
+                    link="/tasks",
+                )
+            except Exception as ex:
+                logger.warning(f"Failed to send approval decision notification: {ex}")
+
         return updated_task
 
     @staticmethod

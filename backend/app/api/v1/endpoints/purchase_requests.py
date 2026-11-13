@@ -63,6 +63,18 @@ async def get_in_charge_candidates(
     return await PurchaseService.get_in_charge_users(session)
 
 
+@router.get("/managers", response_model=List[UserBrief])
+async def get_all_purchase_managers(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    List all PM / TL users (Team Leaders, In-Charges, Purchase Managers)
+    available for filtering or assignment in Purchase Desk.
+    """
+    return await PurchaseService.get_all_purchase_managers(session)
+
+
 @router.post("/assign-manager", response_model=UserBrief)
 async def assign_purchase_manager(
     body: AssignPurchaseManagerRequest,
@@ -104,8 +116,10 @@ async def create_purchase_request(
 async def list_purchase_requests(
     status: Optional[PurchaseRequestStatus] = None,
     search: Optional[str] = None,
-    sort_by: Optional[str] = Query(None, description="Sort field: 'user', 'date', 'total', 'name'"),
+    sort_by: Optional[str] = Query(None, description="Sort field: 'user', 'managed_by', 'date', 'total', 'name'"),
     order: Optional[str] = Query("desc", description="Sort direction: 'asc' or 'desc'"),
+    date: Optional[str] = Query(None, description="Filter by date YYYY-MM-DD"),
+    pm_filter: Optional[str] = Query(None, description="Filter: 'PM_MANAGED', 'SELF_MANAGED', or PM UUID"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
@@ -116,7 +130,7 @@ async def list_purchase_requests(
     - Super Admin & Admin: See all purchase requests.
     - Purchase Manager: Sees all purchase requests.
     - Other users: See their own submitted purchase requests.
-    Supports sorting by users, date, and total value.
+    Supports sorting by users, date, and total value, as well as filtering by date and PM.
     """
     requests, total = await PurchaseService.list_purchase_requests(
         session=session,
@@ -125,6 +139,8 @@ async def list_purchase_requests(
         search=search,
         sort_by=sort_by,
         order=order,
+        date_filter=date,
+        pm_filter=pm_filter,
         skip=skip,
         limit=limit,
     )

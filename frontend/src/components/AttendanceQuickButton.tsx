@@ -18,6 +18,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
 import { attendanceApi, getErrorMessage } from "@/lib/api";
 import { AttendanceTodayStatus } from "@/lib/types";
+import { getBrowserLocation } from "@/lib/geolocation";
 
 export const AttendanceQuickButton: React.FC = () => {
   const { user } = useAuth();
@@ -86,7 +87,13 @@ export const AttendanceQuickButton: React.FC = () => {
     setError(null);
     try {
       if (modalType === "CHECK_IN") {
-        await attendanceApi.checkIn(note.trim() || undefined);
+        const coords = await getBrowserLocation();
+        await attendanceApi.checkIn({
+          note: note.trim() || undefined,
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          accuracy: coords.accuracy,
+        });
       } else {
         await attendanceApi.checkOut(note.trim() || undefined);
       }
@@ -102,7 +109,7 @@ export const AttendanceQuickButton: React.FC = () => {
 
   return (
     <>
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
         {!status?.is_checked_in ? (
           /* Check In Button */
           <button
@@ -113,18 +120,41 @@ export const AttendanceQuickButton: React.FC = () => {
               setModalType("CHECK_IN");
             }}
             title="Punch In for Today's Attendance"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer shrink-0"
           >
             <LogIn className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Check In</span>
           </button>
+        ) : status?.record?.approval_status === "REJECTED" ? (
+          /* Rejected Check-in */
+          <Link
+            href="/attendance"
+            title={`Check-in Rejected: ${status.record.rejection_reason || "Location not verified"}`}
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-50 text-rose-800 border border-rose-200 hover:bg-rose-100 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 transition-colors shrink-0"
+          >
+            <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+            <span className="hidden sm:inline">Check-in Rejected</span>
+            <span className="sm:hidden font-bold text-[10px]">Rejected</span>
+          </Link>
         ) : !status?.is_checked_out ? (
-          /* Checked In - Live Timer & Check Out Button */
-          <div className="flex items-center gap-1 sm:gap-2 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-xl px-2.5 py-1 text-xs">
-            <span className="flex h-2 w-2 relative">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
+          /* Active Working Session - Live Timer & Check Out Button (both regular and off-network pending) */
+          <div className="flex items-center gap-1 sm:gap-1.5 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-xl px-2 sm:px-2.5 py-1 text-xs shrink-0">
+            {status?.record?.approval_status === "PENDING" ? (
+              <Link
+                href="/attendance"
+                title="Off-network check-in recorded! Shift is active. Admin review is pending."
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200 text-[10px] font-bold"
+              >
+                <Clock className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span className="hidden md:inline">Off-Network (Pending)</span>
+                <span className="hidden sm:inline md:hidden">Pending</span>
+              </Link>
+            ) : (
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+            )}
             <span className="font-mono font-bold text-emerald-800 dark:text-emerald-200 text-[11px] sm:text-xs">
               {formatTimer(liveSeconds)}
             </span>
@@ -136,19 +166,24 @@ export const AttendanceQuickButton: React.FC = () => {
                 setModalType("CHECK_OUT");
               }}
               title="Punch Out"
-              className="ml-1 px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] sm:text-xs transition-colors cursor-pointer flex items-center gap-1"
+              className="ml-0.5 sm:ml-1 px-1.5 sm:px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] sm:text-xs transition-colors cursor-pointer flex items-center gap-1 shrink-0"
             >
               <LogOut className="w-3 h-3" />
-              <span>Check Out</span>
+              <span className="hidden sm:inline">Check Out</span>
             </button>
           </div>
         ) : (
           /* Checked Out Badge */
-          <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-xl text-xs font-semibold">
+          <div className="flex items-center gap-1 sm:gap-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2 sm:px-2.5 py-1 rounded-xl text-xs font-semibold shrink-0">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             <span className="text-[11px]">
-              Done ({status.record?.total_hours || 0}h)
+              Done ({status?.record?.total_hours || 0}h)
             </span>
+            {status?.record?.approval_status === "PENDING" && (
+              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium hidden sm:inline">
+                (Pending)
+              </span>
+            )}
           </div>
         )}
 

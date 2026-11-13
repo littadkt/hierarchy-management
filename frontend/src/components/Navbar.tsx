@@ -14,11 +14,12 @@ import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
 import { usePwa } from "@/context/PwaContext";
-import { approvalsApi } from "@/lib/api";
+import { approvalsApi, attendanceApi } from "@/lib/api";
 import { RoleBadge } from "./RoleBadge";
 import { ThemeToggle } from "./ThemeToggle";
 import { ChangePasswordModal } from "./ChangePasswordModal";
 import { AttendanceQuickButton } from "./AttendanceQuickButton";
+import { NotificationDropdown } from "./NotificationDropdown";
 
 export const Navbar: React.FC = () => {
   const { user } = useAuth();
@@ -29,10 +30,14 @@ export const Navbar: React.FC = () => {
 
   const refreshPendingCount = () => {
     if (user) {
-      approvalsApi
-        .getPending()
-        .then((tasks) => setPendingCount(tasks.length))
-        .catch(() => {});
+      Promise.all([
+        approvalsApi.getPending().catch(() => []),
+        user.role === "SUPER_ADMIN" || user.role === "ADMIN"
+          ? attendanceApi.getPendingApprovals().catch(() => [])
+          : Promise.resolve([]),
+      ]).then(([tasks, checkins]) => {
+        setPendingCount(tasks.length + checkins.length);
+      });
     }
   };
 
@@ -46,6 +51,8 @@ export const Navbar: React.FC = () => {
       "TASK_STATUS_UPDATED",
       "TASK_CREATED",
       "TASK_DELETED",
+      "CHECKIN_APPROVAL_REQUESTED",
+      "ATTENDANCE_UPDATED",
       "RESYNC",
     ],
     refreshPendingCount
@@ -54,9 +61,9 @@ export const Navbar: React.FC = () => {
   if (!user) return null;
 
   return (
-    <header className="h-16 shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-3 sm:px-6 z-20 sticky top-0">
+    <header className="h-16 shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-2.5 sm:px-6 z-20 sticky top-0">
       {/* Left side: Hamburger (Mobile) / Collapse Toggle (Desktop) & Role / Identity */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+      <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
         {/* Mobile & Tablet (< lg) Hamburger Menu Button */}
         <button
           type="button"
@@ -83,8 +90,8 @@ export const Navbar: React.FC = () => {
           )}
         </button>
 
-        {/* Logged in role indicator */}
-        <div className="flex items-center gap-2 min-w-0">
+        {/* Logged in role indicator (hidden on small mobile screens to save space) */}
+        <div className="hidden sm:flex items-center gap-2 min-w-0">
           <span className="text-[11px] uppercase tracking-wider text-slate-400 font-medium hidden md:inline truncate">
             Logged in as
           </span>
@@ -93,46 +100,50 @@ export const Navbar: React.FC = () => {
       </div>
 
       {/* Right side: Alerts, Theme, and Profile */}
-      <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+      <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
         {/* Quick Attendance Punch & Timer */}
         <AttendanceQuickButton />
 
-        {/* Approvals Alert Notification */}
+        {/* Notifications Dropdown (Always visible in top bar for both mobile & desktop) */}
+        <NotificationDropdown />
+
+        {/* Approvals Alert Notification (Hidden on mobile phones per user request) */}
         {pendingCount > 0 && (
           <Link
             href="/approvals"
             title={`${pendingCount} Pending Approvals`}
-            className="flex items-center gap-1.5 sm:gap-2 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800 transition-colors shrink-0"
+            className="hidden sm:flex items-center gap-1.5 sm:gap-2 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800 transition-colors shrink-0"
           >
             <ShieldCheck className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-            <span className="hidden sm:inline">{pendingCount} Approvals Pending</span>
-            <span className="sm:hidden font-bold">{pendingCount}</span>
+            <span>{pendingCount} Approvals Pending</span>
           </Link>
         )}
 
-        {/* PWA Install Button (if not already installed) */}
+        {/* PWA Install Button (if not already installed, desktop top bar) */}
         {!isInstalled && (
           <button
             type="button"
             onClick={promptInstall}
             title="Install Team Littad App on this device"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer shrink-0"
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer shrink-0"
           >
             <Download className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-            <span className="hidden sm:inline">Install App</span>
+            <span>Install App</span>
           </button>
         )}
 
-        {/* Dark / Light Mode Toggle */}
-        <ThemeToggle />
+        {/* Dark / Light Mode Toggle (Desktop only in top bar; placed in mobile navigation menu per user request) */}
+        <div className="hidden sm:inline-flex shrink-0">
+          <ThemeToggle />
+        </div>
 
         {/* User Account Button */}
-        <div className="flex items-center pl-1 sm:pl-3 border-l border-slate-200 dark:border-slate-800">
+        <div className="flex items-center pl-0.5 sm:pl-2.5 border-l border-slate-200 dark:border-slate-800 shrink-0">
           <button
             type="button"
             onClick={() => setIsChangePasswordOpen(true)}
-            title="Change Account Password"
-            className="flex items-center gap-2 py-1 px-1.5 sm:px-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer group"
+            title={`Account: ${user.full_name} (${user.role}) - Change Password`}
+            className="flex items-center gap-2 py-0.5 px-0.5 sm:px-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer group"
           >
             <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-xs group-hover:ring-2 group-hover:ring-indigo-500 transition-all shrink-0">
               {user.full_name.charAt(0)}

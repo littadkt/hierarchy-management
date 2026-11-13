@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     FIRST_SUPER_ADMIN_PASSWORD: str = "SuperAdmin@123"
     FIRST_SUPER_ADMIN_NAME: str = "Primary Super Admin"
 
+    # Dedicated Office Wi-Fi / Network Restriction for Check-In
+    # Comma-separated list of allowed IPs or CIDR blocks (e.g. 127.0.0.1, 192.168.1.0/24, 10.0.0.0/8)
+    ALLOWED_WIFI_IPS: str = "127.0.0.1, ::1, 192.168.1.0/24, 192.168.0.0/16, 10.0.0.0/8"
+    ALLOWED_WIFI_SSID: Optional[str] = None
+
     # Automated Database Backup Configuration (Daily at 10:00 PM)
     BACKUP_DIR: str = "backups"
     BACKUP_SCHEDULE_HOUR: int = 22

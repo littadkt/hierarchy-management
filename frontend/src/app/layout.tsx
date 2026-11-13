@@ -7,7 +7,7 @@ import { ConfirmProvider } from "@/context/ConfirmContext";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { SidebarProvider } from "@/context/SidebarContext";
 import { PwaProvider } from "@/context/PwaContext";
-import { PwaInstallPrompt } from "@/components/PwaInstallPrompt";
+import { PwaInstallGuideModal } from "@/components/PwaInstallGuideModal";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -161,7 +161,7 @@ export default function RootLayout({
                 <PwaProvider>
                   <SidebarProvider>
                     {children}
-                    <PwaInstallPrompt />
+                    <PwaInstallGuideModal />
                   </SidebarProvider>
                 </PwaProvider>
               </ConfirmProvider>

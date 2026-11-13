@@ -21,6 +21,8 @@ class Branch(Base):
     code: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True, index=True)
     city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    allowed_wifi_ips: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="Comma-separated allowed IP/CIDR addresses")
+    wifi_ssid: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="Office Wi-Fi SSID")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

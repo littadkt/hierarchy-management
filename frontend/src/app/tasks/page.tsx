@@ -23,6 +23,7 @@ import {
   TrendingUp,
   Award,
   ListTodo,
+  FileSpreadsheet,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useConfirm } from "@/context/ConfirmContext";
@@ -35,6 +36,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { CreateTaskModal } from "@/components/CreateTaskModal";
 import { TaskDetailModal } from "@/components/TaskDetailModal";
 import { EditTaskModal } from "@/components/EditTaskModal";
+import { DownloadReportsModal } from "@/components/DownloadReportsModal";
 
 export default function TasksPage() {
   const { user, hasPermission } = useAuth();
@@ -63,6 +65,7 @@ export default function TasksPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isDownloadReportsOpen, setIsDownloadReportsOpen] = useState(false);
 
   // Load assignable subordinate users for filtering (excluding self)
   useEffect(() => {
@@ -334,15 +337,27 @@ export default function TasksPage() {
               Create, view, and track tasks according to organizational hierarchy
             </p>
           </div>
-          {hasPermission("tasks", "add") && (
-            <button
-              onClick={() => setIsCreateOpen(true)}
-              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 self-start sm:self-auto transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Create Task</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+            {(user?.role === "SUPER_ADMIN" || user?.role === "ADMIN") && (
+              <button
+                type="button"
+                onClick={() => setIsDownloadReportsOpen(true)}
+                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>Download Report</span>
+              </button>
+            )}
+            {hasPermission("tasks", "add") && (
+              <button
+                onClick={() => setIsCreateOpen(true)}
+                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Create Task</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Filter Controls Bar */}
@@ -640,7 +655,10 @@ export default function TasksPage() {
                       {assigneeFilter === "ME"
                         ? "My Personal Performance"
                         : assigneeFilter && assigneeFilter !== "SUBORDINATES"
-                        ? "Filtered Assignee"
+                        ? `User: ${
+                            subordinateUsers.find((u) => u.id === assigneeFilter)?.full_name ||
+                            "Filtered Assignee"
+                          }`
                         : "Current Scope"}
                     </span>
                   </h4>
@@ -1048,6 +1066,12 @@ export default function TasksPage() {
         onTaskUpdated={() => {
           loadTasks();
         }}
+      />
+
+      <DownloadReportsModal
+        isOpen={isDownloadReportsOpen}
+        onClose={() => setIsDownloadReportsOpen(false)}
+        defaultReportType="performance"
       />
     </ProtectedRoute>
   );

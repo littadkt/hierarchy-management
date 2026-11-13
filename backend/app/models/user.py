@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from app.models.task_activity import TaskActivity
     from app.models.task_comment import TaskComment
     from app.models.checklist import ChecklistItem
+    from app.models.schedule import TimeSchedule
+    from app.models.notification import Notification
 
 
 class Role(str, enum.Enum):
@@ -58,6 +60,20 @@ class User(Base):
     # Organizational Categorization
     branch: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     department: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+
+    # Shift Schedule & Custom Check-in / Check-out Times
+    schedule_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("time_schedules.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    check_in_time: Mapped[Optional[str]] = mapped_column(
+        String(8), nullable=True, comment="HH:MM (e.g. 09:00)"
+    )
+    check_out_time: Mapped[Optional[str]] = mapped_column(
+        String(8), nullable=True, comment="HH:MM (e.g. 18:00)"
+    )
 
     # Reporting / Lineage Hierarchy
     reports_to_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -120,6 +136,20 @@ class User(Base):
         default=dict,
         nullable=True,
     )
+
+    # Shift schedule relationship
+    schedule: Mapped[Optional["TimeSchedule"]] = relationship(
+        "TimeSchedule",
+        foreign_keys=[schedule_id],
+        back_populates="users",
+        lazy="joined",
+    )
+
+    @property
+    def schedule_name(self) -> Optional[str]:
+        if self.schedule:
+            return self.schedule.name
+        return None
 
     # Self-referential relationships
     manager: Mapped[Optional["User"]] = relationship(
@@ -187,6 +217,12 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
         order_by="desc(UserLoginRecord.login_at)",
+    )
+    notifications: Mapped[List["Notification"]] = relationship(
+        "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="desc(Notification.created_at)",
     )
 
 

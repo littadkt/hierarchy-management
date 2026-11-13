@@ -85,6 +85,39 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
     [broadcastToSubscribers]
   );
 
+  // Automatically request browser notification access as soon as site loads
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+
+    const askPermission = () => {
+      if (Notification.permission === "default") {
+        try {
+          Notification.requestPermission().catch(() => {});
+        } catch (_) {}
+      }
+    };
+
+    // 1. Immediately request on initial page mount
+    askPermission();
+
+    // 2. Also attach a one-time gesture listener in case browser requires user interaction first
+    const handleFirstInteraction = () => {
+      askPermission();
+      window.removeEventListener("click", handleFirstInteraction);
+      window.removeEventListener("keydown", handleFirstInteraction);
+    };
+
+    if (Notification.permission === "default") {
+      window.addEventListener("click", handleFirstInteraction, { once: true });
+      window.addEventListener("keydown", handleFirstInteraction, { once: true });
+    }
+
+    return () => {
+      window.removeEventListener("click", handleFirstInteraction);
+      window.removeEventListener("keydown", handleFirstInteraction);
+    };
+  }, []);
+
   useEffect(() => {
     if (!token || !user) {
       if (eventSourceRef.current) {

@@ -50,6 +50,47 @@ class PurchaseService:
         return result.scalars().all()
 
     @staticmethod
+    async def get_all_purchase_managers(session: AsyncSession) -> List[User]:
+        """
+        Returns all users who act as PM or TL:
+        - Active Team Leaders (TEAM_LEADER)
+        - Active In-Charges (IN_CHARGE)
+        - Users designated as is_purchase_manager == True
+        - Any user who has purchase requests assigned to them as purchase_manager_id
+        """
+        stmt = (
+            select(User)
+            .where(
+                User.is_active == True,
+                or_(
+                    User.role.in_([Role.TEAM_LEADER, Role.IN_CHARGE]),
+                    User.is_purchase_manager == True,
+                ),
+            )
+            .order_by(User.full_name.asc())
+        )
+        result = await session.execute(stmt)
+        managers = list(result.scalars().all())
+
+        # Include any additional manager referenced in existing requests
+        pm_ids_stmt = (
+            select(PurchaseRequest.purchase_manager_id)
+            .distinct()
+            .where(PurchaseRequest.purchase_manager_id.isnot(None))
+        )
+        pm_ids_res = await session.execute(pm_ids_stmt)
+        pm_ids = set(pm_ids_res.scalars().all())
+
+        existing_ids = {u.id for u in managers}
+        missing_ids = pm_ids - existing_ids
+        if missing_ids:
+            extra_stmt = select(User).where(User.id.in_(missing_ids)).order_by(User.full_name.asc())
+            extra_res = await session.execute(extra_stmt)
+            managers.extend(extra_res.scalars().all())
+
+        return managers
+
+    @staticmethod
     async def get_default_purchase_manager_for_user(
         session: AsyncSession, requester: User
     ) -> Optional[User]:
@@ -270,6 +311,8 @@ class PurchaseService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         order: Optional[str] = "desc",
+        date_filter: Optional[str] = None,
+        pm_filter: Optional[str] = None,
         skip: int = 0,
         limit: int = 50,
     ) -> Tuple[List[PurchaseRequest], int]:
@@ -376,11 +419,50 @@ class PurchaseService:
                 )
             )
 
+        if date_filter and date_filter.strip():
+            stmt = stmt.where(func.to_char(PurchaseRequest.created_at, "YYYY-MM-DD") == date_filter.strip())
+
+        if pm_filter and pm_filter.strip():
+            pm_val = pm_filter.strip()
+            if pm_val == "PM_MANAGED":
+                # Orders placed by Staff that are managed by assigned PM/TL
+                stmt = stmt.where(PurchaseRequest.requested_by.has(User.role == Role.STAFF))
+            elif pm_val == "SELF_MANAGED":
+                # Orders placed by non-staff (TL, In-Charge, Admin, Super Admin), self-managed
+                stmt = stmt.where(PurchaseRequest.requested_by.has(User.role != Role.STAFF))
+            else:
+                try:
+                    target_pm_id = uuid.UUID(pm_val)
+                    stmt = stmt.where(
+                        or_(
+                            PurchaseRequest.purchase_manager_id == target_pm_id,
+                            PurchaseRequest.requested_by.has(
+                                (User.role == Role.STAFF) & (User.reports_to_id == target_pm_id)
+                            ),
+                            (PurchaseRequest.requested_by_id == target_pm_id) & PurchaseRequest.requested_by.has(User.role != Role.STAFF),
+                        )
+                    )
+                except (ValueError, TypeError):
+                    pass
+
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await session.execute(count_stmt)).scalar() or 0
 
         is_asc = (order or "desc").lower() == "asc"
-        if sort_by == "user":
+        if sort_by in ["managed_by", "manager", "purchase_manager"]:
+            pm_alias = aliased(User)
+            req_alias = aliased(User)
+            stmt = (
+                stmt
+                .outerjoin(pm_alias, PurchaseRequest.purchase_manager_id == pm_alias.id)
+                .outerjoin(req_alias, PurchaseRequest.requested_by_id == req_alias.id)
+            )
+            manager_name_expr = func.coalesce(pm_alias.full_name, req_alias.full_name, "")
+            if is_asc:
+                stmt = stmt.order_by(manager_name_expr.asc(), desc(PurchaseRequest.created_at))
+            else:
+                stmt = stmt.order_by(manager_name_expr.desc(), desc(PurchaseRequest.created_at))
+        elif sort_by == "user":
             user_alias = aliased(User)
             stmt = stmt.outerjoin(user_alias, PurchaseRequest.requested_by_id == user_alias.id)
             if is_asc:

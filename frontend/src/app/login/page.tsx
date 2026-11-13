@@ -1,15 +1,13 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Network, ArrowRight, AlertCircle, ShieldCheck, Download, Eye, EyeOff } from "lucide-react";
+import { Network, ArrowRight, AlertCircle, ShieldCheck, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { usePwa } from "@/context/PwaContext";
 import { getErrorMessage } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default function LoginPage() {
   const { login } = useAuth();
-  const { isInstalled, promptInstall } = usePwa();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -52,18 +50,8 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 dark:bg-gradient-to-br dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 flex flex-col justify-center items-center p-4 sm:p-6 text-slate-900 dark:text-white relative transition-colors duration-200">
-      {/* Top Header Actions (Theme Toggle & Install Button) */}
+      {/* Top Header Actions (Theme Toggle) */}
       <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-        {!isInstalled && (
-          <button
-            type="button"
-            onClick={promptInstall}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/80 dark:bg-slate-800/80 backdrop-blur-md text-indigo-600 dark:text-indigo-400 hover:bg-white dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xs transition-all cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Install App</span>
-          </button>
-        )}
         <ThemeToggle />
       </div>
 

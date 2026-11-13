@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   CalendarCheck2,
   Clock,
@@ -25,18 +25,26 @@ import {
   FileText,
   Calendar,
   Coffee,
+  User as UserIcon,
+  MapPin,
+  ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
-import { attendanceApi, branchesApi, getErrorMessage } from "@/lib/api";
+import { attendanceApi, branchesApi, departmentsApi, usersApi, getErrorMessage } from "@/lib/api";
+import { getBrowserLocation, getGoogleMapsUrl } from "@/lib/geolocation";
 import {
   AttendanceRecord,
   AttendanceTodayStatus,
   AttendanceReportSummary,
   Branch,
+  Department,
+  UserBrief,
+  BufferStatus,
 } from "@/lib/types";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { RoleBadge } from "@/components/RoleBadge";
+import { ManageSchedulesModal } from "@/components/ManageSchedulesModal";
 
 function formatTime(isoStr?: string | null) {
   if (!isoStr) return "-";
@@ -117,12 +125,14 @@ export default function AttendancePage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Today's punch state
+  // Today's punch state & grace buffer
   const [todayStatus, setTodayStatus] = useState<AttendanceTodayStatus | null>(null);
+  const [bufferStatus, setBufferStatus] = useState<BufferStatus | null>(null);
+  const [isManageSchedulesOpen, setIsManageSchedulesOpen] = useState(false);
   const [liveSeconds, setLiveSeconds] = useState(0);
   const [punchNote, setPunchNote] = useState("");
   const [isPunching, setIsPunching] = useState(false);
-  const [punchMessage, setPunchMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [punchMessage, setPunchMessage] = useState<{ type: "success" | "error" | "warning"; text: string } | null>(null);
 
   // Tabs
   const canViewReports =
@@ -146,16 +156,52 @@ export default function AttendancePage() {
   const [reportTotal, setReportTotal] = useState(0);
   const [reportLoading, setReportLoading] = useState(false);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [usersList, setUsersList] = useState<UserBrief[]>([]);
 
   // Team Report Filters
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState("");
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const [selectedDept, setSelectedDept] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("ALL");
   const [reportPage, setReportPage] = useState(0);
   const [exporting, setExporting] = useState(false);
   const PAGE_SIZE = 15;
+
+  const selectedBranchObj = branches.find((b) => b.id === selectedBranchId);
+
+  const filteredUsersList = useMemo(() => {
+    if (!selectedBranchId || !selectedBranchObj) {
+      return usersList;
+    }
+    return usersList.filter((u) => {
+      if (!u.branch) return false;
+      const uBranch = u.branch.toLowerCase().trim();
+      const bName = selectedBranchObj.name.toLowerCase().trim();
+      const bCode = selectedBranchObj.code ? selectedBranchObj.code.toLowerCase().trim() : "";
+      return uBranch === bName || (bCode && uBranch === bCode);
+    });
+  }, [usersList, selectedBranchId, selectedBranchObj]);
+
+  const handleBranchChange = (branchId: string) => {
+    setSelectedBranchId(branchId);
+    setReportPage(0);
+    if (branchId) {
+      const bObj = branches.find((b) => b.id === branchId);
+      if (bObj && selectedUserId) {
+        const currentUser = usersList.find((u) => u.id === selectedUserId);
+        const matches =
+          currentUser?.branch &&
+          (currentUser.branch.toLowerCase().trim() === bObj.name.toLowerCase().trim() ||
+            (bObj.code && currentUser.branch.toLowerCase().trim() === bObj.code.toLowerCase().trim()));
+        if (!matches) {
+          setSelectedUserId("");
+        }
+      }
+    }
+  };
 
   // Initialize dates client-side only to preserve static prerendering
   useEffect(() => {
@@ -178,12 +224,18 @@ export default function AttendancePage() {
     );
   }, []);
 
-  // 1. Fetch Today Status
+  // 1. Fetch Today Status & Grace Buffer
   const fetchTodayStatus = useCallback(async () => {
     try {
-      const data = await attendanceApi.getToday();
+      const [data, bufferData] = await Promise.all([
+        attendanceApi.getToday(),
+        attendanceApi.getBufferStatus().catch(() => null),
+      ]);
       setTodayStatus(data);
       setLiveSeconds(data.worked_seconds);
+      if (bufferData) {
+        setBufferStatus(bufferData);
+      }
     } catch (err) {
       console.error("Failed to fetch today status", err);
     }
@@ -227,6 +279,7 @@ export default function AttendancePage() {
         end_date: reportEndDate || undefined,
         branch_id: selectedBranchId || undefined,
         department: selectedDept.trim() || undefined,
+        user_id: selectedUserId || undefined,
         status: selectedStatus !== "ALL" ? selectedStatus : undefined,
         skip: reportPage * PAGE_SIZE,
         limit: PAGE_SIZE,
@@ -239,7 +292,7 @@ export default function AttendancePage() {
     } finally {
       setReportLoading(false);
     }
-  }, [canViewReports, reportStartDate, reportEndDate, selectedBranchId, selectedDept, selectedStatus, reportPage]);
+  }, [canViewReports, reportStartDate, reportEndDate, selectedBranchId, selectedDept, selectedUserId, selectedStatus, reportPage]);
 
   // Load initial data
   useEffect(() => {
@@ -248,7 +301,34 @@ export default function AttendancePage() {
       .list(true)
       .then(setBranches)
       .catch(() => {});
+    departmentsApi
+      .list(true)
+      .then(setDepartments)
+      .catch(() => {});
   }, [fetchTodayStatus]);
+
+  // Load assignable / all users for attendance filter
+  useEffect(() => {
+    if (canViewReports) {
+      const fetchPromise =
+        user?.role === "SUPER_ADMIN" || user?.role === "ADMIN"
+          ? usersApi.list().then((list) => list as unknown as UserBrief[])
+          : usersApi.getAssignable();
+
+      fetchPromise
+        .then((data) => {
+          const sorted = [...data].sort((a, b) => a.full_name.localeCompare(b.full_name));
+          setUsersList(sorted);
+        })
+        .catch((err) => {
+          console.error("Failed to load users for attendance filter:", err);
+          usersApi
+            .getAssignable()
+            .then(setUsersList)
+            .catch(() => {});
+        });
+    }
+  }, [user, canViewReports]);
 
   useEffect(() => {
     if (activeTab === "my_history") {
@@ -277,9 +357,22 @@ export default function AttendancePage() {
     setIsPunching(true);
     setPunchMessage(null);
     try {
-      await attendanceApi.checkIn(punchNote.trim() || undefined);
+      const coords = await getBrowserLocation();
+      const res = await attendanceApi.checkIn({
+        note: punchNote.trim() || undefined,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        accuracy: coords.accuracy,
+      });
       setPunchNote("");
-      setPunchMessage({ type: "success", text: "Successfully checked in! Have a productive workday." });
+      if (res.approval_status === "PENDING") {
+        setPunchMessage({
+          type: "warning",
+          text: "Check-in recorded! You checked in outside office Wi-Fi network; your session is active and your GPS location has been submitted to Admins for review.",
+        });
+      } else {
+        setPunchMessage({ type: "success", text: "Successfully checked in! Have a productive workday." });
+      }
       await fetchTodayStatus();
       if (activeTab === "my_history") fetchMyHistory();
       if (activeTab === "team_report") fetchTeamReport();
@@ -317,12 +410,15 @@ export default function AttendancePage() {
         end_date: reportEndDate || undefined,
         branch_id: selectedBranchId || undefined,
         department: selectedDept.trim() || undefined,
+        user_id: selectedUserId || undefined,
         status: selectedStatus !== "ALL" ? selectedStatus : undefined,
       });
+      const selectedUserObj = usersList.find((u) => u.id === selectedUserId);
+      const userPrefix = selectedUserObj ? `${selectedUserObj.full_name.replace(/\s+/g, "_")}_` : "";
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `attendance_report_${reportStartDate || "all"}_to_${reportEndDate || "all"}.xlsx`;
+      a.download = `attendance_report_${userPrefix}${reportStartDate || "all"}_to_${reportEndDate || "all"}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -354,7 +450,7 @@ export default function AttendancePage() {
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200">
             <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-            Half Day (&lt;4h)
+            Half Day Leave
           </span>
         );
       case "LATE":
@@ -449,26 +545,124 @@ export default function AttendancePage() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-1">
-                <div className="bg-slate-50 dark:bg-slate-800/60 p-3 rounded-2xl border border-slate-200/60 dark:border-slate-800">
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Check In</div>
-                  <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-                    {formatTime(todayStatus?.record?.check_in_time)}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+                <div className="bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-2xl border border-slate-200/60 dark:border-slate-800">
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wide">Shift Schedule</div>
+                  <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white mt-0.5 truncate">
+                    {todayStatus?.scheduled_check_in
+                      ? `${todayStatus.scheduled_check_in} - ${todayStatus.scheduled_check_out || ""}`
+                      : bufferStatus?.scheduled_check_in
+                      ? `${bufferStatus.scheduled_check_in} - ${bufferStatus.scheduled_check_out || ""}`
+                      : "Flexible"}
+                  </div>
+                  <div className="text-[10px] text-indigo-600 dark:text-indigo-400 truncate mt-0.5">
+                    {bufferStatus?.schedule_name || "General Shift"}
                   </div>
                 </div>
-                <div className="bg-slate-50 dark:bg-slate-800/60 p-3 rounded-2xl border border-slate-200/60 dark:border-slate-800">
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Check Out</div>
-                  <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
+                <div className="bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-2xl border border-slate-200/60 dark:border-slate-800">
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wide">Check In</div>
+                  <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white mt-0.5">
+                    {formatTime(todayStatus?.record?.check_in_time)}
+                  </div>
+                  {todayStatus?.record?.is_late && (
+                    <div className="text-[10px] text-rose-500 font-semibold mt-0.5">
+                      +{todayStatus.record.late_minutes}m late
+                    </div>
+                  )}
+                </div>
+                <div className="bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-2xl border border-slate-200/60 dark:border-slate-800">
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wide">Check Out</div>
+                  <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white mt-0.5">
                     {formatTime(todayStatus?.record?.check_out_time)}
                   </div>
                 </div>
-                <div className="bg-slate-50 dark:bg-slate-800/60 p-3 rounded-2xl border border-slate-200/60 dark:border-slate-800 col-span-2 sm:col-span-1">
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Total Worked</div>
-                  <div className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
+                <div className="bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-2xl border border-slate-200/60 dark:border-slate-800">
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wide">Total Worked</div>
+                  <div className="text-xs sm:text-sm font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
                     {formatHoursMinutes(todayStatus?.record?.total_hours || liveSeconds / 3600)}
                   </div>
                 </div>
               </div>
+
+              {/* Grace Buffer Status Info */}
+              <div className="p-2.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
+                  <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  <span>
+                    <strong>10-Min Grace Buffer:</strong>{" "}
+                    {bufferStatus ? (
+                      <span>
+                        <span className="font-bold text-indigo-600 dark:text-indigo-400">{bufferStatus.buffer_days_used}</span> / {bufferStatus.monthly_limit} used this month ({bufferStatus.remaining_days} remaining)
+                      </span>
+                    ) : (
+                      "Max 3 days/month allowed with 10 min window"
+                    )}
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Late past buffer is marked as Half Day
+                </span>
+              </div>
+
+              {/* Late check-in alert notice */}
+              {todayStatus?.record?.status === "HALF_DAY" && todayStatus?.record?.is_late && (
+                <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Late Check-in Notice:</strong> Checked in at {formatTime(todayStatus.record.check_in_time)} ({todayStatus.record.late_minutes}m late). Buffer limit was exceeded or elapsed, so today is recorded as <strong>Half Day Leave</strong>.
+                  </span>
+                </div>
+              )}
+              {todayStatus?.record?.is_buffer_used && (
+                <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-xs text-blue-800 dark:text-blue-300 flex items-center gap-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                  <span>
+                    <strong>Grace Buffer Used Today:</strong> 10-minute buffer window applied.
+                  </span>
+                </div>
+              )}
+
+              {/* Off-Network Check-in Pending Approval Alert */}
+              {todayStatus?.record?.approval_status === "PENDING" && (
+                <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-1.5">
+                  <div className="flex items-center gap-2 font-bold">
+                    <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>Off-Network Check-In: Awaiting Admin Approval</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90">
+                    You checked in outside the designated office Wi-Fi network. Your work session is actively recorded from your punch-in time; your GPS location has been submitted to Admins and Super Admins for review.
+                  </p>
+                  {todayStatus.record.latitude && todayStatus.record.longitude && (
+                    <div className="flex items-center gap-2 pt-0.5 text-[11px]">
+                      <MapPin className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span>GPS: {todayStatus.record.latitude.toFixed(5)}, {todayStatus.record.longitude.toFixed(5)}</span>
+                      {getGoogleMapsUrl(todayStatus.record.latitude, todayStatus.record.longitude) && (
+                        <a
+                          href={getGoogleMapsUrl(todayStatus.record.latitude, todayStatus.record.longitude)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-bold underline text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 ml-1 inline-flex items-center gap-0.5"
+                        >
+                          View Map
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Check-in Rejected Alert */}
+              {todayStatus?.record?.approval_status === "REJECTED" && (
+                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-xs text-rose-900 dark:text-rose-200 space-y-1">
+                  <div className="flex items-center gap-2 font-bold">
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                    <span>Off-Network Check-In Rejected</span>
+                  </div>
+                  <p className="text-[11px] text-rose-800/90 dark:text-rose-300/90">
+                    Reason: {todayStatus.record.rejection_reason || "Location not verified"}
+                  </p>
+                </div>
+              )}
 
               {/* Progress towards standard 8 hours */}
               <div className="pt-2 space-y-1">
@@ -550,8 +744,10 @@ export default function AttendancePage() {
                 <div
                   className={`w-full text-xs p-2.5 rounded-xl text-center font-medium ${
                     punchMessage.type === "success"
-                      ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
-                      : "bg-rose-50 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300"
+                      ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+                      : punchMessage.type === "warning"
+                      ? "bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+                      : "bg-rose-50 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800"
                   }`}
                 >
                   {punchMessage.text}
@@ -562,7 +758,7 @@ export default function AttendancePage() {
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-200 dark:border-slate-800 gap-4">
+        <div className="flex border-b border-slate-200 dark:border-slate-800 gap-4 overflow-x-auto pb-0.5">
           {canViewReports && (
             <button
               type="button"
@@ -678,19 +874,32 @@ export default function AttendancePage() {
                   </span>
                 </div>
 
-                {/* Export Excel Button */}
-                <button
-                  type="button"
-                  onClick={handleExportExcel}
-                  disabled={exporting}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm disabled:opacity-50 cursor-pointer"
-                >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>{exporting ? "Generating Excel..." : "Export Excel Report"}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {(user?.role === "SUPER_ADMIN" || user?.role === "ADMIN") && (
+                    <button
+                      type="button"
+                      onClick={() => setIsManageSchedulesOpen(true)}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-800 transition cursor-pointer"
+                    >
+                      <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Manage Time Schedules</span>
+                    </button>
+                  )}
+
+                  {/* Export Excel Button */}
+                  <button
+                    type="button"
+                    onClick={handleExportExcel}
+                    disabled={exporting}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm disabled:opacity-50 cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>{exporting ? "Generating Excel..." : "Export Excel Report"}</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
                 {/* Start Date */}
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
@@ -723,18 +932,15 @@ export default function AttendancePage() {
                   />
                 </div>
 
-                {/* Branch selector */}
+                {/* Branch selector (Select Branch First) */}
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
                     Branch
                   </label>
                   <select
                     value={selectedBranchId}
-                    onChange={(e) => {
-                      setSelectedBranchId(e.target.value);
-                      setReportPage(0);
-                    }}
-                    className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    onChange={(e) => handleBranchChange(e.target.value)}
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 cursor-pointer"
                   >
                     <option value="">All Branches</option>
                     {branches.map((b) => (
@@ -745,21 +951,52 @@ export default function AttendancePage() {
                   </select>
                 </div>
 
+                {/* Employee / User selector (Filtered by chosen Branch) */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                    Employee / User {selectedBranchObj && `(${filteredUsersList.length})`}
+                  </label>
+                  <select
+                    value={selectedUserId}
+                    onChange={(e) => {
+                      setSelectedUserId(e.target.value);
+                      setReportPage(0);
+                    }}
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 cursor-pointer"
+                  >
+                    {selectedBranchObj ? (
+                      <option value="">All in {selectedBranchObj.name} ({filteredUsersList.length})</option>
+                    ) : (
+                      <option value="">All Employees / Users</option>
+                    )}
+                    {filteredUsersList.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.full_name} ({u.role ? u.role.replace("_", " ") : "User"}{u.branch ? ` • ${u.branch}` : ""})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Department filter */}
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
                     Department
                   </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Sales, Operations"
+                  <select
                     value={selectedDept}
                     onChange={(e) => {
                       setSelectedDept(e.target.value);
                       setReportPage(0);
                     }}
-                    className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
-                  />
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 cursor-pointer"
+                  >
+                    <option value="">All Departments</option>
+                    {departments.map((d) => (
+                      <option key={d.id} value={d.name}>
+                        {d.name} {d.code ? `(${d.code})` : ""}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Status filter */}
@@ -784,6 +1021,91 @@ export default function AttendancePage() {
                   </select>
                 </div>
               </div>
+
+              {/* Quick Date Presets */}
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500">
+                <span className="text-[11px] font-medium text-slate-400">Quick Range:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    const pad = (n: number) => String(n).padStart(2, "0");
+                    const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+                    setReportStartDate(todayStr);
+                    setReportEndDate(todayStr);
+                    setReportPage(0);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium transition cursor-pointer text-[11px]"
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    const pad = (n: number) => String(n).padStart(2, "0");
+                    const firstDayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
+                    const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+                    setReportStartDate(firstDayStr);
+                    setReportEndDate(todayStr);
+                    setReportPage(0);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium transition cursor-pointer text-[11px]"
+                >
+                  This Month
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    const pad = (n: number) => String(n).padStart(2, "0");
+                    const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                    const lastDayLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+                    const s = `${firstDayLastMonth.getFullYear()}-${pad(firstDayLastMonth.getMonth() + 1)}-${pad(firstDayLastMonth.getDate())}`;
+                    const e = `${lastDayLastMonth.getFullYear()}-${pad(lastDayLastMonth.getMonth() + 1)}-${pad(lastDayLastMonth.getDate())}`;
+                    setReportStartDate(s);
+                    setReportEndDate(e);
+                    setReportPage(0);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium transition cursor-pointer text-[11px]"
+                >
+                  Last Month
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    const pad = (n: number) => String(n).padStart(2, "0");
+                    const past30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                    const s = `${past30.getFullYear()}-${pad(past30.getMonth() + 1)}-${pad(past30.getDate())}`;
+                    const e = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+                    setReportStartDate(s);
+                    setReportEndDate(e);
+                    setReportPage(0);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium transition cursor-pointer text-[11px]"
+                >
+                  Last 30 Days
+                </button>
+                {(reportStartDate || reportEndDate || selectedUserId || selectedBranchId || selectedDept || selectedStatus !== "ALL") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReportStartDate("");
+                      setReportEndDate("");
+                      setSelectedUserId("");
+                      setSelectedBranchId("");
+                      setSelectedDept("");
+                      setSelectedStatus("ALL");
+                      setReportPage(0);
+                    }}
+                    className="ml-auto text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1 font-medium text-[11px] cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Reset All Filters</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Attendance Report Data Table */}
@@ -795,17 +1117,18 @@ export default function AttendancePage() {
                       <th className="py-3.5 px-4">Employee</th>
                       <th className="py-3.5 px-4">Branch & Dept</th>
                       <th className="py-3.5 px-4">Date</th>
+                      <th className="py-3.5 px-4">Shift Schedule</th>
                       <th className="py-3.5 px-4">Check In</th>
                       <th className="py-3.5 px-4">Check Out</th>
                       <th className="py-3.5 px-4">Working Duration</th>
-                      <th className="py-3.5 px-4">Status</th>
+                      <th className="py-3.5 px-4">Status & Buffer</th>
                       <th className="py-3.5 px-4">Notes</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                     {reportLoading ? (
                       <tr>
-                        <td colSpan={8} className="py-12 text-center text-slate-400">
+                        <td colSpan={9} className="py-12 text-center text-slate-400">
                           <div className="flex items-center justify-center gap-2">
                             <Clock className="w-5 h-5 animate-spin text-indigo-500" />
                             <span>Loading attendance records...</span>
@@ -814,7 +1137,7 @@ export default function AttendancePage() {
                       </tr>
                     ) : reportRecords.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-12 text-center text-slate-400">
+                        <td colSpan={9} className="py-12 text-center text-slate-400">
                           No attendance records found matching the specified filters.
                         </td>
                       </tr>
@@ -853,6 +1176,16 @@ export default function AttendancePage() {
                             {formatDate(r.date)}
                           </td>
 
+                          <td className="py-3 px-4 font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                            {r.schedule_check_in ? (
+                              <span>
+                                {r.schedule_check_in} - {r.schedule_check_out || ""}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">Flexible</span>
+                            )}
+                          </td>
+
                           <td className="py-3 px-4 font-mono text-slate-700 dark:text-slate-300">
                             {formatTime(r.check_in_time)}
                           </td>
@@ -871,7 +1204,43 @@ export default function AttendancePage() {
                             {formatHoursMinutes(r.total_hours)}
                           </td>
 
-                          <td className="py-3 px-4">{getStatusBadge(r.status)}</td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-col gap-1 items-start">
+                              {getStatusBadge(r.status)}
+                              {r.approval_status === "PENDING" && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                  Pending Approval
+                                </span>
+                              )}
+                              {r.approval_status === "REJECTED" && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                                  Rejected
+                                </span>
+                              )}
+                              {r.latitude && r.longitude && getGoogleMapsUrl(r.latitude, r.longitude) && (
+                                <a
+                                  href={getGoogleMapsUrl(r.latitude, r.longitude)!}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={`GPS: ${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}`}
+                                  className="inline-flex items-center gap-1 text-[10px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+                                >
+                                  <MapPin className="w-3 h-3" />
+                                  <span>Map</span>
+                                </a>
+                              )}
+                              {r.is_buffer_used && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                  Grace Buffer
+                                </span>
+                              )}
+                              {r.is_late && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                                  Late (+{r.late_minutes}m)
+                                </span>
+                              )}
+                            </div>
+                          </td>
 
                           <td className="py-3 px-4 max-w-xs truncate text-[11px] text-slate-500 dark:text-slate-400">
                             {r.check_in_note && (
@@ -955,10 +1324,11 @@ export default function AttendancePage() {
                   <thead>
                     <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wider text-[11px]">
                       <th className="py-3.5 px-4">Date</th>
+                      <th className="py-3.5 px-4">Shift Schedule</th>
                       <th className="py-3.5 px-4">Check In</th>
                       <th className="py-3.5 px-4">Check Out</th>
                       <th className="py-3.5 px-4">Total Worked</th>
-                      <th className="py-3.5 px-4">Status</th>
+                      <th className="py-3.5 px-4">Status & Buffer</th>
                       <th className="py-3.5 px-4">Check In Note</th>
                       <th className="py-3.5 px-4">Check Out Note</th>
                     </tr>
@@ -966,7 +1336,7 @@ export default function AttendancePage() {
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                     {myLoading ? (
                       <tr>
-                        <td colSpan={7} className="py-12 text-center text-slate-400">
+                        <td colSpan={8} className="py-12 text-center text-slate-400">
                           <div className="flex items-center justify-center gap-2">
                             <Clock className="w-5 h-5 animate-spin text-indigo-500" />
                             <span>Loading your attendance records...</span>
@@ -975,7 +1345,7 @@ export default function AttendancePage() {
                       </tr>
                     ) : myRecords.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="py-12 text-center text-slate-400">
+                        <td colSpan={8} className="py-12 text-center text-slate-400">
                           No personal attendance records found for this period.
                         </td>
                       </tr>
@@ -987,6 +1357,15 @@ export default function AttendancePage() {
                         >
                           <td className="py-3 px-4 font-semibold text-slate-900 dark:text-white">
                             {formatDate(r.date)}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                            {r.schedule_check_in ? (
+                              <span>
+                                {r.schedule_check_in} - {r.schedule_check_out || ""}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">Flexible</span>
+                            )}
                           </td>
                           <td className="py-3 px-4 font-mono text-slate-700 dark:text-slate-300">
                             {formatTime(r.check_in_time)}
@@ -1003,7 +1382,43 @@ export default function AttendancePage() {
                           <td className="py-3 px-4 font-semibold text-indigo-600 dark:text-indigo-400">
                             {formatHoursMinutes(r.total_hours)}
                           </td>
-                          <td className="py-3 px-4">{getStatusBadge(r.status)}</td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-col gap-1 items-start">
+                              {getStatusBadge(r.status)}
+                              {r.approval_status === "PENDING" && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                  Pending Approval
+                                </span>
+                              )}
+                              {r.approval_status === "REJECTED" && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                                  Rejected
+                                </span>
+                              )}
+                              {r.latitude && r.longitude && getGoogleMapsUrl(r.latitude, r.longitude) && (
+                                <a
+                                  href={getGoogleMapsUrl(r.latitude, r.longitude)!}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={`GPS: ${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}`}
+                                  className="inline-flex items-center gap-1 text-[10px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+                                >
+                                  <MapPin className="w-3 h-3" />
+                                  <span>Map</span>
+                                </a>
+                              )}
+                              {r.is_buffer_used && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                  Grace Buffer
+                                </span>
+                              )}
+                              {r.is_late && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                                  Late (+{r.late_minutes}m)
+                                </span>
+                              )}
+                            </div>
+                          </td>
                           <td className="py-3 px-4 text-slate-500 dark:text-slate-400 text-[11px] max-w-xs truncate">
                             {r.check_in_note || "-"}
                           </td>
@@ -1019,6 +1434,16 @@ export default function AttendancePage() {
             </div>
           </div>
         )}
+
+        {/* Manage Schedules Modal */}
+        <ManageSchedulesModal
+          isOpen={isManageSchedulesOpen}
+          onClose={() => setIsManageSchedulesOpen(false)}
+          onSchedulesUpdated={() => {
+            fetchTodayStatus();
+            if (activeTab === "team_report") fetchTeamReport();
+          }}
+        />
       </div>
     </ProtectedRoute>
   );

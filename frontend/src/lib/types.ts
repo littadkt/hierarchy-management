@@ -34,6 +34,31 @@ export interface WindowDefinition {
   sidebar_href?: string;
 }
 
+export interface TimeSchedule {
+  id: string;
+  name: string;
+  check_in_time: string;
+  check_out_time: string;
+  buffer_minutes: number;
+  monthly_buffer_limit: number;
+  description?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  employee_count?: number;
+}
+
+export interface BufferStatus {
+  buffer_days_used: number;
+  monthly_limit: number;
+  buffer_minutes: number;
+  remaining_days: number;
+  scheduled_check_in?: string | null;
+  scheduled_check_out?: string | null;
+  schedule_name?: string | null;
+  month_name: string;
+}
+
 export interface UserBrief {
   id: string;
   email: string;
@@ -41,6 +66,10 @@ export interface UserBrief {
   role: Role;
   branch?: string | null;
   department?: string | null;
+  schedule_id?: string | null;
+  check_in_time?: string | null;
+  check_out_time?: string | null;
+  schedule_name?: string | null;
   reports_to_id?: string | null;
   is_purchase_manager?: boolean;
   can_place_wholesale_orders?: boolean;
@@ -66,6 +95,10 @@ export interface User {
   is_active: boolean;
   branch?: string | null;
   department?: string | null;
+  schedule_id?: string | null;
+  check_in_time?: string | null;
+  check_out_time?: string | null;
+  schedule_name?: string | null;
   is_purchase_manager?: boolean;
   can_place_wholesale_orders?: boolean;
   reports_to_id?: string | null;
@@ -89,6 +122,8 @@ export interface Branch {
   code?: string | null;
   city?: string | null;
   address?: string | null;
+  allowed_wifi_ips?: string | null;
+  wifi_ssid?: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -448,13 +483,28 @@ export interface AttendanceRecord {
   check_in_time: string;
   check_out_time?: string | null;
   total_hours: number;
-  status: "PRESENT" | "CHECKED_IN" | "HALF_DAY" | "LATE" | "ON_LEAVE";
+  status: "PRESENT" | "CHECKED_IN" | "HALF_DAY" | "LATE" | "ON_LEAVE" | "REJECTED";
+  schedule_check_in?: string | null;
+  schedule_check_out?: string | null;
+  is_buffer_used?: boolean;
+  is_late?: boolean;
+  late_minutes?: number;
   check_in_note?: string | null;
   check_out_note?: string | null;
   ip_address?: string | null;
+  approval_status?: "APPROVED" | "PENDING" | "REJECTED";
+  requires_approval?: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
+  accuracy?: number | null;
+  wifi_ssid?: string | null;
+  approved_by_id?: string | null;
+  approved_at?: string | null;
+  rejection_reason?: string | null;
   created_at: string;
   updated_at: string;
   user?: UserBrief | null;
+  approved_by?: UserBrief | null;
 }
 
 export interface AttendanceTodayStatus {
@@ -462,6 +512,9 @@ export interface AttendanceTodayStatus {
   is_checked_out: boolean;
   record?: AttendanceRecord | null;
   worked_seconds: number;
+  buffer_status?: BufferStatus | null;
+  scheduled_check_in?: string | null;
+  scheduled_check_out?: string | null;
 }
 
 export interface AttendanceReportSummary {
@@ -577,6 +630,31 @@ export interface WarrantyJobsListResponse {
   total: number;
   status_counts: Record<string, number>;
 }
+
+export type NotificationType =
+  | "TASK_ASSIGNED"
+  | "CHECKOUT_REMINDER"
+  | "APPROVAL_REQUESTED"
+  | "APPROVAL_DECIDED"
+  | "SYSTEM";
+
+export interface AppNotification {
+  id: string;
+  user_id: string;
+  title: string;
+  message: string;
+  type: NotificationType | string;
+  link?: string | null;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  items: AppNotification[];
+  total: number;
+  unread_count: number;
+}
+
 
 
 

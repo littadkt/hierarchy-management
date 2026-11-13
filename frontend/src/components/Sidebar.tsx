@@ -22,13 +22,12 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
-  Download,
   Wrench,
   ShieldCheck,
+  Palette,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
-import { usePwa } from "@/context/PwaContext";
 import { RoleBadge } from "./RoleBadge";
 import { ThemeToggle } from "./ThemeToggle";
 import { ChangePasswordModal } from "./ChangePasswordModal";
@@ -37,7 +36,6 @@ export const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const { user, logout } = useAuth();
   const { isMobileOpen, closeMobile, isCollapsed, toggleCollapsed } = useSidebar();
-  const { isInstallable, isInstalled, promptInstall } = usePwa();
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
   if (!user) return null;
@@ -208,21 +206,16 @@ export const Sidebar: React.FC = () => {
           })}
         </nav>
 
-        {/* PWA Install Button (visible if app is not already installed in standalone mode) */}
-        {!isInstalled && (
-          <div className="px-3 py-2 border-t border-slate-200 dark:border-slate-800">
-            <button
-              onClick={promptInstall}
-              className={`w-full flex items-center ${
-                isCollapsed ? "justify-center px-2" : "gap-2 px-3"
-              } py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold shadow-md shadow-indigo-600/20 transition-all cursor-pointer`}
-              title="Install Team Littad App on this device"
-            >
-              <Download className="w-4 h-4 shrink-0" />
-              <span className={isCollapsed ? "lg:hidden" : ""}>Install App</span>
-            </button>
+        {/* Mobile View Dedicated Theme & Appearance Selector */}
+        <div className="lg:hidden px-3.5 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Palette className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Theme & Appearance
+            </span>
           </div>
-        )}
+          <ThemeToggle />
+        </div>
 
         {/* User Footer Profile */}
         <div className="p-3.5 sm:p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">

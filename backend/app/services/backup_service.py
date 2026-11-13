@@ -3,6 +3,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -100,7 +101,8 @@ class BackupService:
     async def create_backup(tag: str = "manual") -> Dict[str, Any]:
         """
         Executes pg_dump to backup the full database into the local backups folder.
-        Ensures all tables, branches, and departments are initialized before dumping.
+        Uses asyncio.to_thread with subprocess.run to guarantee event loop compatibility
+        across Windows Proactor and Selector event loops.
         """
         backup_dir = settings.ABSOLUTE_BACKUP_DIR
         timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -114,6 +116,7 @@ class BackupService:
         # Configure environment with DB password
         env = os.environ.copy()
         env["PGPASSWORD"] = settings.POSTGRES_PASSWORD
+        env["PGCLIENTENCODING"] = "UTF8"
 
         cmd = [
             pg_dump_bin,
@@ -123,19 +126,23 @@ class BackupService:
             "-d", settings.POSTGRES_DB,
             "--clean",
             "--if-exists",
+            "--no-owner",
+            "--no-acl",
             "-f", str(filepath.resolve()),
         ]
 
-        # Execute async subprocess
+        # Execute subprocess safely via asyncio.to_thread
         start_time = datetime.now()
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                cmd,
                 env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                capture_output=True,
+                check=False,
             )
-            stdout, stderr = await proc.communicate()
+            stdout = proc.stdout
+            stderr = proc.stderr
         except Exception as e:
             logger.error(f"Failed to launch pg_dump process: {e}")
             raise HTTPException(
@@ -228,8 +235,8 @@ class BackupService:
         """
         Restores the full PostgreSQL database from a chosen .sql or .dump file.
         Takes an automatic safety backup prior to restoring.
-        Cleans the public schema prior to applying dump to eliminate any foreign key,
-        enum type, or constraint ordering conflicts.
+        Ensures tables, Super Admin, and seeds are verified in the finally block
+        so the database is never left in an uninitialized or broken state.
         """
         if not file_path.is_file() or file_path.stat().st_size < 50:
             raise HTTPException(
@@ -290,25 +297,27 @@ class BackupService:
             except Exception as e:
                 logger.warning(f"Could not terminate existing connections: {e}")
 
-            # 3. Clean public schema cleanly so all tables, types, and constraints are reset
+            # 3. Clean 'public' schema with CASCADE so that all existing tables, foreign keys,
+            # types, and sequences are wiped clean. This prevents 'relation already exists',
+            # constraint dependency failures, and duplicate key errors during restore.
             try:
-                conn = await asyncpg.connect(
+                clean_conn = await asyncpg.connect(
                     host=db_host,
                     port=settings.POSTGRES_PORT,
                     user=settings.POSTGRES_USER,
                     password=settings.POSTGRES_PASSWORD,
                     database=settings.POSTGRES_DB,
                 )
-                await conn.execute(f"""
+                await clean_conn.execute("""
                     DROP SCHEMA IF EXISTS public CASCADE;
                     CREATE SCHEMA public;
-                    GRANT ALL ON SCHEMA public TO {settings.POSTGRES_USER};
+                    GRANT ALL ON SCHEMA public TO CURRENT_USER;
                     GRANT ALL ON SCHEMA public TO public;
                 """)
-                await conn.close()
-                logger.info("Public schema dropped and recreated clean prior to restore.")
+                await clean_conn.close()
+                logger.info("Schema 'public' dropped with CASCADE and recreated cleanly for fresh restoration.")
             except Exception as e:
-                logger.warning(f"Could not clean public schema prior to restore: {e}")
+                logger.warning(f"Could not drop public schema with CASCADE: {e}")
 
             # 4. Determine whether input file is a custom binary PostgreSQL archive (PGDMP) or plain SQL
             is_binary_dump = False
@@ -333,33 +342,34 @@ class BackupService:
                     "-p", str(settings.POSTGRES_PORT),
                     "-U", settings.POSTGRES_USER,
                     "-d", settings.POSTGRES_DB,
-                    "--clean",
-                    "--if-exists",
                     "--no-owner",
                     "--no-acl",
                     str(file_path.resolve()),
                 ]
             else:
                 psql_bin = BackupService.find_pg_binary("psql")
-                logger.info(f"Using psql binary: {psql_bin} for SQL restore operation")
+                logger.info(f"Using psql binary: {psql_bin} with ON_ERROR_STOP=1 for SQL restore operation")
                 cmd = [
                     psql_bin,
                     "-h", db_host,
                     "-p", str(settings.POSTGRES_PORT),
                     "-U", settings.POSTGRES_USER,
                     "-d", settings.POSTGRES_DB,
+                    "-v", "ON_ERROR_STOP=1",
                     "-f", str(file_path.resolve()),
                 ]
 
             start_time = datetime.now()
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    cmd,
                     env=env,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                    capture_output=True,
+                    check=False,
                 )
-                stdout, stderr = await proc.communicate()
+                stdout = proc.stdout
+                stderr = proc.stderr
             except Exception as e:
                 logger.error(f"Failed to launch restore subprocess: {e}")
                 raise HTTPException(
@@ -371,28 +381,47 @@ class BackupService:
             stderr_str = stderr.decode("utf-8", errors="replace").strip()
 
             # For pg_restore, exit code 1 indicates non-fatal notices/warnings (e.g. dropping non-existent tables)
-            # For psql, non-zero code is fatal unless stderr only contains non-fatal notices
+            # For psql with ON_ERROR_STOP=1, non-zero exit code indicates a fatal SQL error
             is_fatal_error = (proc.returncode > 1) if is_binary_dump else (proc.returncode != 0)
             if is_fatal_error:
-                # If psql returned non-zero, check if actual fatal error exists in stderr
-                fatal_keywords = ["FATAL:", "could not connect", "password authentication failed", "database does not exist"]
-                has_fatal = any(kw.lower() in stderr_str.lower() for kw in fatal_keywords)
-                if has_fatal:
-                    logger.error(f"Database restore failed with code {proc.returncode}: {stderr_str}")
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Database restore failed with code {proc.returncode}: {stderr_str or 'Unknown database error'}",
-                    )
-                else:
-                    logger.warning(f"Restore finished with non-fatal notices (exit code {proc.returncode}): {stderr_str[:300]}")
+                error_msg = stderr_str or f"Database restore process exited with failure code {proc.returncode}."
+                logger.error(f"Database restore failed with code {proc.returncode}: {error_msg}")
+                
+                # If safety snapshot was taken, attempt rollback to pre-restore snapshot
+                if safety_snapshot and Path(safety_snapshot["filepath"]).is_file():
+                    try:
+                        logger.warning(f"Rolling back to safety snapshot '{safety_snapshot['filename']}'...")
+                        rb_cmd = [
+                            psql_bin,
+                            "-h", db_host,
+                            "-p", str(settings.POSTGRES_PORT),
+                            "-U", settings.POSTGRES_USER,
+                            "-d", settings.POSTGRES_DB,
+                            "-f", safety_snapshot["filepath"],
+                        ]
+                        await asyncio.to_thread(subprocess.run, rb_cmd, env=env, capture_output=True, check=False)
+                    except Exception as rb_err:
+                        logger.error(f"Rollback to safety snapshot failed: {rb_err}")
 
-            # Clear connection pool again to ensure fresh pool connections to restored tables
-            try:
-                await engine.dispose()
-            except Exception:
-                pass
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Database restore failed (code {proc.returncode}): {error_msg}",
+                )
 
-            # 5. Re-verify database tables, super admin, branches, departments, warranty defaults
+            logger.info(f"Full database successfully restored from '{file_path.name}' in {duration_sec:.2f}s")
+
+            return {
+                "success": True,
+                "message": f"Database successfully restored from {file_path.name}.",
+                "restored_file": file_path.name,
+                "file_size": format_file_size(file_path.stat().st_size),
+                "duration_seconds": round(duration_sec, 2),
+                "safety_backup": safety_snapshot["filename"] if safety_snapshot else None,
+                "restored_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+        finally:
+            # 4. ALWAYS re-verify database tables, super admin, branches, departments, warranty defaults
             try:
                 from app.db.init_db import (
                     init_branches,
@@ -412,19 +441,13 @@ class BackupService:
             except Exception as e:
                 logger.warning(f"Post-restore verification warning: {e}")
 
-            logger.info(f"Full database successfully restored from '{file_path.name}' in {duration_sec:.2f}s")
+            # Clear connection pool to ensure fresh pool connections to restored tables
+            from app.db.session import engine
+            try:
+                await engine.dispose()
+            except Exception:
+                pass
 
-            return {
-                "success": True,
-                "message": f"Database successfully restored from {file_path.name}.",
-                "restored_file": file_path.name,
-                "file_size": format_file_size(file_path.stat().st_size),
-                "duration_seconds": round(duration_sec, 2),
-                "safety_backup": safety_snapshot["filename"] if safety_snapshot else None,
-                "restored_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-        finally:
             # Resume scheduler
             if is_scheduler_running:
                 try:

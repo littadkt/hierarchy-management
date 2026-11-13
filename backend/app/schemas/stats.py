@@ -44,6 +44,8 @@ class UserPerformance(BaseModel):
 
 class TaskPerformanceStats(BaseModel):
     scope: str = "organization"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     overall_performance_score: float = 0.0
     task_metrics: TaskPerformanceMetrics
     subtask_metrics: SubtaskPerformanceMetrics
