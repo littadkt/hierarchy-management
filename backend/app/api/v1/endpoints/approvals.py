@@ -2,7 +2,7 @@ from datetime import datetime, time, timezone
 from typing import Any, List, Optional
 import uuid
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -10,7 +10,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.user import Role, User
-from app.schemas.approval import ApprovalDecision, SubmitForApproval
+from app.schemas.approval import ApprovalDecision, ApprovalPendingContextOut, SubmitForApproval
 from app.schemas.task import TaskOut
 from app.services.task_service import TaskService
 
@@ -195,4 +195,19 @@ async def decide_approval(
     - If REJECTED: status is returned to IN_PROGRESS with rejection feedback.
     """
     return await TaskService.process_approval_decision(session, current_user, task_id, decision)
+
+
+@router.get("/{task_id}/pending-context", response_model=ApprovalPendingContextOut)
+async def get_approval_pending_context(
+    task_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Get hierarchy pending tasks context for Super Admin approval confirmation:
+    Shows pending tasks of the user to whom approval/task is assigned,
+    and pending tasks of all users who come under them in the hierarchy.
+    """
+    return await TaskService.get_approval_pending_context(session, task_id)
+
 

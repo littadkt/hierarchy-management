@@ -13,6 +13,7 @@ class CheckInRequest(BaseModel):
     longitude: Optional[float] = Field(None, description="GPS Longitude captured at check-in")
     accuracy: Optional[float] = Field(None, description="GPS accuracy in meters")
     wifi_ssid: Optional[str] = Field(None, max_length=100, description="Connected Wi-Fi SSID name")
+    client_ip: Optional[str] = Field(None, max_length=100, description="Optional client-reported IP override for testing or remote clients")
 
 
 class CheckOutRequest(BaseModel):

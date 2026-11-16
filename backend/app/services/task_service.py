@@ -1827,18 +1827,24 @@ class TaskService:
         old_status = task.status
 
         if decision.action == ApprovalAction.APPROVE:
-            # Hierarchy Restriction: Subordinates must complete/submit today's recurring tasks or tasks due today
-            target_user = task.assigned_to
-            if not target_user:
-                target_user = await UserService.get_by_id(session, task.assigned_to_id)
-            await TaskService.validate_subordinates_today_tasks_completed(
-                session, target_user or operator, task
-            )
+            # Hierarchy Restriction: Subordinates must complete/submit today's recurring tasks or tasks due today.
+            # Super Admin has master provision to approve any approval assigned to anyone, overriding subordinate restrictions.
+            if not is_super_admin:
+                target_user = task.assigned_to
+                if not target_user:
+                    target_user = await UserService.get_by_id(session, task.assigned_to_id)
+                await TaskService.validate_subordinates_today_tasks_completed(
+                    session, target_user or operator, task
+                )
 
             task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now(timezone.utc)
             action_type = ActivityAction.APPROVED
-            details = decision.comments or "Task approved and closed."
+            if is_super_admin and task.approver_id and task.approver_id != operator.id:
+                approver_name = task.approver.full_name if task.approver else "Assigned Approver"
+                details = f"[Super Admin Override - Designated Approver: {approver_name}] {decision.comments or 'Task approved and closed.'}".strip()
+            else:
+                details = decision.comments or "Task approved and closed."
 
             # Spawn next recurring instance if applicable
             await TaskService._handle_recurring_spawn(session, task)
@@ -1890,19 +1896,24 @@ class TaskService:
             "status": str(task.status.value if hasattr(task.status, "value") else task.status),
         })
 
-        # Send notification to task assignee
+        # Send notification to task assignee, creator, and designated approver if overridden
         notify_users = set()
         if task.assigned_to_id and task.assigned_to_id != operator.id:
             notify_users.add(task.assigned_to_id)
         if task.created_by_id and task.created_by_id != operator.id:
             notify_users.add(task.created_by_id)
+        if is_super_admin and task.approver_id and task.approver_id != operator.id:
+            notify_users.add(task.approver_id)
 
         for u_id in notify_users:
             try:
                 from app.services.notification_service import NotificationService
                 if decision.action == ApprovalAction.APPROVE:
                     n_title = "Task Approved"
-                    n_msg = f"Your task '{task.title}' was approved by {operator.full_name}."
+                    if is_super_admin and task.approver_id and u_id == task.approver_id:
+                        n_msg = f"Task '{task.title}' (assigned to you for approval) was approved by Super Admin {operator.full_name}."
+                    else:
+                        n_msg = f"Your task '{task.title}' was approved by {operator.full_name}."
                 else:
                     n_title = "Task Approval Rejected"
                     reason = f" Reason: {decision.comments}" if decision.comments else ""
@@ -1919,6 +1930,133 @@ class TaskService:
                 logger.warning(f"Failed to send approval decision notification: {ex}")
 
         return updated_task
+
+    @staticmethod
+    async def get_approval_pending_context(
+        session: AsyncSession,
+        task_id: uuid.UUID,
+    ) -> Dict[str, Any]:
+        """
+        Retrieves pending tasks context for Super Admin approval confirmation:
+        - The user to whom approval/task is assigned (designated approver and/or task assignee)
+        - Tasks pending for that user
+        - Tasks pending for all users who come under them in the hierarchy
+        """
+        task = await TaskService.get_by_id(session, task_id)
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found",
+            )
+
+        local_now = datetime.now().astimezone()
+        today_d = local_now.date()
+
+        async def build_user_summary(u: Optional[User]) -> Optional[Dict[str, Any]]:
+            if not u:
+                return None
+
+            # 1. Tasks directly assigned to this user that are pending/in progress
+            pending_stmt = (
+                select(Task)
+                .where(
+                    Task.assigned_to_id == u.id,
+                    Task.id != task.id,
+                    Task.status.in_([TaskStatus.PENDING, TaskStatus.IN_PROGRESS, TaskStatus.PENDING_APPROVAL]),
+                )
+                .order_by(Task.due_date.asc().nulls_last(), Task.created_at.desc())
+            )
+            res = await session.execute(pending_stmt)
+            user_tasks = list(res.scalars().all())
+
+            user_pending_items = []
+            for t in user_tasks:
+                due_d = t.due_date.date() if t.due_date else None
+                user_pending_items.append({
+                    "id": str(t.id),
+                    "title": t.title,
+                    "status": t.status.value if hasattr(t.status, "value") else str(t.status),
+                    "priority": t.priority.value if hasattr(t.priority, "value") else str(t.priority),
+                    "due_date": t.due_date.isoformat() if t.due_date else None,
+                    "is_overdue": (due_d < today_d) if due_d else False,
+                    "is_due_today": (due_d == today_d) if due_d else False,
+                    "assigned_to_id": str(u.id),
+                    "assigned_to_name": u.full_name,
+                    "assigned_to_role": u.role.value if hasattr(u.role, "value") else str(u.role),
+                })
+
+            # 2. Subordinates who come under this user in the hierarchy
+            subordinates = await TaskService.get_subordinate_users(session, u)
+            subordinate_pending_items = []
+            if subordinates:
+                sub_ids = [s.id for s in subordinates]
+                sub_stmt = (
+                    select(Task)
+                    .options(selectinload(Task.assigned_to))
+                    .where(
+                        Task.assigned_to_id.in_(sub_ids),
+                        Task.id != task.id,
+                        Task.status.in_([TaskStatus.PENDING, TaskStatus.IN_PROGRESS, TaskStatus.PENDING_APPROVAL]),
+                    )
+                    .order_by(Task.due_date.asc().nulls_last(), Task.created_at.desc())
+                )
+                sub_res = await session.execute(sub_stmt)
+                sub_tasks = list(sub_res.scalars().all())
+
+                for t in sub_tasks:
+                    due_d = t.due_date.date() if t.due_date else None
+                    subordinate_pending_items.append({
+                        "id": str(t.id),
+                        "title": t.title,
+                        "status": t.status.value if hasattr(t.status, "value") else str(t.status),
+                        "priority": t.priority.value if hasattr(t.priority, "value") else str(t.priority),
+                        "due_date": t.due_date.isoformat() if t.due_date else None,
+                        "is_overdue": (due_d < today_d) if due_d else False,
+                        "is_due_today": (due_d == today_d) if due_d else False,
+                        "assigned_to_id": str(t.assigned_to_id) if t.assigned_to_id else None,
+                        "assigned_to_name": t.assigned_to.full_name if t.assigned_to else "Subordinate",
+                        "assigned_to_role": t.assigned_to.role.value if (t.assigned_to and hasattr(t.assigned_to.role, "value")) else "",
+                    })
+
+            return {
+                "user_id": str(u.id),
+                "full_name": u.full_name,
+                "email": u.email,
+                "role": u.role.value if hasattr(u.role, "value") else str(u.role),
+                "branch": u.branch,
+                "department": u.department,
+                "user_pending_tasks": user_pending_items,
+                "subordinates_count": len(subordinates),
+                "subordinates_pending_tasks": subordinate_pending_items,
+            }
+
+        approver_summary = await build_user_summary(task.approver)
+        assignee_summary = await build_user_summary(task.assigned_to)
+
+        primary_summary = approver_summary or assignee_summary
+        if not primary_summary:
+            primary_summary = {
+                "user_id": "",
+                "full_name": "Unassigned",
+                "email": "",
+                "role": "",
+                "branch": None,
+                "department": None,
+                "user_pending_tasks": [],
+                "subordinates_count": 0,
+                "subordinates_pending_tasks": [],
+            }
+
+        total_pending = len(primary_summary["user_pending_tasks"]) + len(primary_summary["subordinates_pending_tasks"])
+
+        return {
+            "task_id": str(task.id),
+            "task_title": task.title,
+            "approver": approver_summary,
+            "assignee": assignee_summary,
+            "primary_user": primary_summary,
+            "total_pending_count": total_pending,
+        }
 
     @staticmethod
     async def _copy_subtasks_to_recurring_instance(

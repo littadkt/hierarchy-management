@@ -62,6 +62,15 @@ async def check_in(
     else:
         ip_addr = request.client.host if request.client else "127.0.0.1"
 
+    if ip_addr and ip_addr.startswith("::ffff:"):
+        ip_addr = ip_addr[7:].strip()
+
+    # Allow client_ip override from payload if provided (useful for local dev testing)
+    if payload and payload.client_ip and payload.client_ip.strip():
+        # If client connecting via localhost/loopback or client_ip explicitly provided
+        if ip_addr in ("127.0.0.1", "::1", "localhost") or not ip_addr:
+            ip_addr = payload.client_ip.strip()
+
     note = payload.note if payload else None
     lat = payload.latitude if payload else None
     lng = payload.longitude if payload else None

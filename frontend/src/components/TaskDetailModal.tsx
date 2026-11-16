@@ -24,7 +24,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
 import { approvalsApi, attachmentsApi, tasksApi, getErrorMessage } from "@/lib/api";
-import { Subtask, Task, TaskActivity, TaskAttachment, TaskComment, TaskStatus } from "@/lib/types";
+import { Subtask, Task, TaskActivity, TaskAttachment, TaskComment, TaskStatus, Role, ApprovalPendingContext } from "@/lib/types";
 import { RoleBadge } from "./RoleBadge";
 import { StatusBadge } from "./StatusBadge";
 import { EditTaskModal } from "./EditTaskModal";
@@ -55,6 +55,8 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   const [approvalNotes, setApprovalNotes] = useState("");
   const [showApprovalBox, setShowApprovalBox] = useState(false);
   const [actionType, setActionType] = useState<"SUBMIT" | "APPROVE" | "REJECT">("SUBMIT");
+  const [pendingContext, setPendingContext] = useState<ApprovalPendingContext | null>(null);
+  const [loadingPendingContext, setLoadingPendingContext] = useState(false);
   const [isEditTaskOpen, setIsEditTaskOpen] = useState(false);
   const [subordinateStatus, setSubordinateStatus] = useState<{
     can_complete_or_submit: boolean;
@@ -220,6 +222,25 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     }
   };
 
+  const handleOpenApprovalBox = async (type: "SUBMIT" | "APPROVE" | "REJECT") => {
+    setActionType(type);
+    setShowApprovalBox(true);
+    setApprovalNotes("");
+    setPendingContext(null);
+
+    if (type === "APPROVE" && isSuperAdmin && taskId) {
+      setLoadingPendingContext(true);
+      try {
+        const ctx = await approvalsApi.getPendingContext(taskId);
+        setPendingContext(ctx);
+      } catch (err) {
+        console.error("Failed to load approval pending context", err);
+      } finally {
+        setLoadingPendingContext(false);
+      }
+    }
+  };
+
   const handleApprovalAction = async () => {
     if (!taskId) return;
     setSubmitting(true);
@@ -234,6 +255,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       }
       setShowApprovalBox(false);
       setApprovalNotes("");
+      setPendingContext(null);
       await loadData();
       onTaskUpdated();
     } catch (err) {
@@ -538,20 +560,110 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
               {showApprovalBox && (
                 <div className="p-4 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-800 shadow-lg space-y-3">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                      {actionType === "SUBMIT"
-                        ? "Submit Task for Approval"
-                        : actionType === "APPROVE"
-                        ? "Approve Task"
-                        : "Reject Task"}
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      {actionType === "SUBMIT" ? (
+                        <span>Submit Task for Approval</span>
+                      ) : actionType === "APPROVE" ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                          <span>
+                            {isSuperAdmin ? "Super Admin Approval Override" : "Approve Task"}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="w-4 h-4 text-rose-600" />
+                          <span>Reject Task</span>
+                        </>
+                      )}
                     </h4>
                     <button
                       onClick={() => setShowApprovalBox(false)}
-                      className="text-slate-400 hover:text-slate-600"
+                      className="text-slate-400 hover:text-slate-600 cursor-pointer"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   </div>
+
+                  {actionType === "APPROVE" && isSuperAdmin && (
+                    <>
+                      {loadingPendingContext && (
+                        <div className="py-4 flex items-center justify-center gap-2 text-xs text-slate-500">
+                          <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                          <span>Loading pending context for this user and subordinates...</span>
+                        </div>
+                      )}
+                      {pendingContext && !loadingPendingContext && (
+                        <div className="space-y-2 text-xs">
+                          <div className="p-2.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900 flex flex-wrap items-center justify-between gap-1">
+                            <span className="text-slate-600 dark:text-slate-300">
+                              Target: <strong className="text-slate-900 dark:text-white">{pendingContext.primary_user.full_name}</strong> ({pendingContext.primary_user.role})
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                pendingContext.total_pending_count > 0
+                                  ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                  : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                              }`}
+                            >
+                              {pendingContext.total_pending_count} total pending
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
+                              <span className="font-semibold block text-[11px] text-slate-600 dark:text-slate-300">
+                                User Pending Tasks ({pendingContext.primary_user.user_pending_tasks.length})
+                              </span>
+                              {pendingContext.primary_user.user_pending_tasks.length > 0 ? (
+                                <ul className="mt-1 space-y-1 max-h-24 overflow-y-auto pr-1">
+                                  {pendingContext.primary_user.user_pending_tasks.map((p) => (
+                                    <li key={p.id} className="text-[11px] text-slate-700 dark:text-slate-300 truncate">
+                                      • {p.title}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1">None pending</p>
+                              )}
+                            </div>
+
+                            <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
+                              <span className="font-semibold block text-[11px] text-slate-600 dark:text-slate-300">
+                                Subordinates Pending ({pendingContext.primary_user.subordinates_pending_tasks.length})
+                              </span>
+                              {pendingContext.primary_user.subordinates_pending_tasks.length > 0 ? (
+                                <ul className="mt-1 space-y-1 max-h-24 overflow-y-auto pr-1">
+                                  {pendingContext.primary_user.subordinates_pending_tasks.map((p) => (
+                                    <li key={p.id} className="text-[11px] text-slate-700 dark:text-slate-300 truncate">
+                                      • {p.assigned_to_name}: {p.title}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1">
+                                  {pendingContext.primary_user.subordinates_count === 0
+                                    ? "No subordinates"
+                                    : "All completed"}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {pendingContext.total_pending_count > 0 ? (
+                            <p className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 p-2 rounded-lg">
+                              * Notice: There are pending tasks remaining. Super Admin override will approve and close this task.
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 p-2 rounded-lg">
+                              All tasks for this user and subordinates are completed. Safe to approve.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+
                   <textarea
                     rows={2}
                     value={approvalNotes}
@@ -567,21 +679,25 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowApprovalBox(false)}
-                      className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100"
+                      className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700 cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
                       type="button"
                       onClick={handleApprovalAction}
-                      disabled={submitting}
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-lg text-white ${
+                      disabled={submitting || loadingPendingContext}
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-lg text-white cursor-pointer ${
                         actionType === "REJECT"
                           ? "bg-rose-600 hover:bg-rose-700"
-                          : "bg-indigo-600 hover:bg-indigo-700"
+                          : "bg-emerald-600 hover:bg-emerald-700"
                       }`}
                     >
-                      {submitting ? "Processing..." : "Confirm"}
+                      {submitting
+                        ? "Processing..."
+                        : actionType === "APPROVE" && isSuperAdmin && pendingContext?.total_pending_count
+                        ? "Confirm Override"
+                        : "Confirm"}
                     </button>
                   </div>
                 </div>
@@ -769,12 +885,9 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
             {task.requires_approval &&
               (task.status === "IN_PROGRESS" || task.status === "PENDING") && (
                 <button
-                  onClick={() => {
-                    setActionType("SUBMIT");
-                    setShowApprovalBox(true);
-                  }}
+                  onClick={() => handleOpenApprovalBox("SUBMIT")}
                   disabled={submitting}
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-xs flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <ShieldAlert className="w-3.5 h-3.5" />
                   <span>Submit for Approval</span>
@@ -785,23 +898,17 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
             {task.requires_approval && isPendingApproval && isApprover && (
               <>
                 <button
-                  onClick={() => {
-                    setActionType("REJECT");
-                    setShowApprovalBox(true);
-                  }}
+                  onClick={() => handleOpenApprovalBox("REJECT")}
                   disabled={submitting}
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 cursor-pointer"
                 >
                   <XCircle className="w-3.5 h-3.5" />
                   <span>Reject</span>
                 </button>
                 <button
-                  onClick={() => {
-                    setActionType("APPROVE");
-                    setShowApprovalBox(true);
-                  }}
+                  onClick={() => handleOpenApprovalBox("APPROVE")}
                   disabled={submitting}
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   <span>Approve & Complete</span>

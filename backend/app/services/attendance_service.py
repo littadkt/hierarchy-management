@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.core.broadcaster import broadcaster
 from app.core.config import settings
@@ -33,18 +33,26 @@ def is_ip_in_network(client_ip: Optional[str], allowed_str: Optional[str]) -> bo
     """
     Check if client_ip matches any exact IP or CIDR block in allowed_str.
     allowed_str can be comma-, semicolon-, or newline-delimited.
+    Correctly handles IPv4, IPv6, and IPv4-mapped IPv6 (::ffff:x.x.x.x).
     """
     if not client_ip or not allowed_str:
         return False
 
     clean_ip_str = client_ip.strip()
-    if clean_ip_str.startswith("[") and "]" in clean_ip_str:
-        clean_ip_str = clean_ip_str[1:clean_ip_str.index("]")]
-    elif ":" in clean_ip_str and "." in clean_ip_str:
+    if clean_ip_str.startswith("["):
+        end_bracket = clean_ip_str.find("]")
+        if end_bracket != -1:
+            clean_ip_str = clean_ip_str[1:end_bracket].strip()
+    elif clean_ip_str.count(":") == 1 and "." in clean_ip_str:
         clean_ip_str = clean_ip_str.split(":")[0].strip()
+
+    if clean_ip_str.lower().startswith("::ffff:") and "." in clean_ip_str:
+        clean_ip_str = clean_ip_str[7:].strip()
 
     try:
         c_ip = ipaddress.ip_address(clean_ip_str)
+        if isinstance(c_ip, ipaddress.IPv6Address) and c_ip.ipv4_mapped:
+            c_ip = c_ip.ipv4_mapped
     except ValueError:
         return False
 
@@ -53,12 +61,19 @@ def is_ip_in_network(client_ip: Optional[str], allowed_str: Optional[str]) -> bo
         if entry == "*":
             return True
         try:
-            if "/" in entry:
-                net = ipaddress.ip_network(entry, strict=False)
-                if c_ip in net:
+            clean_entry = entry.strip()
+            if clean_entry.lower().startswith("::ffff:") and "." in clean_entry:
+                clean_entry = clean_entry[7:].strip()
+
+            if "/" in clean_entry:
+                net = ipaddress.ip_network(clean_entry, strict=False)
+                if c_ip.version == net.version and c_ip in net:
                     return True
             else:
-                if c_ip == ipaddress.ip_address(entry):
+                entry_ip = ipaddress.ip_address(clean_entry)
+                if isinstance(entry_ip, ipaddress.IPv6Address) and entry_ip.ipv4_mapped:
+                    entry_ip = entry_ip.ipv4_mapped
+                if c_ip == entry_ip:
                     return True
         except (ValueError, TypeError):
             continue
@@ -197,8 +212,8 @@ class AttendanceService:
                 branch_has_network_rules = True
 
         if branch_has_network_rules:
-            effective_allowed_ips = branch.allowed_wifi_ips if branch and branch.allowed_wifi_ips else None
-            effective_ssid = branch.wifi_ssid if branch and branch.wifi_ssid else None
+            effective_allowed_ips = (branch.allowed_wifi_ips.strip() if branch and branch.allowed_wifi_ips and branch.allowed_wifi_ips.strip() else None) or settings.ALLOWED_WIFI_IPS
+            effective_ssid = (branch.wifi_ssid.strip() if branch and branch.wifi_ssid and branch.wifi_ssid.strip() else None) or settings.ALLOWED_WIFI_SSID
         else:
             effective_allowed_ips = settings.ALLOWED_WIFI_IPS
             effective_ssid = settings.ALLOWED_WIFI_SSID
@@ -375,24 +390,46 @@ class AttendanceService:
             await session.commit()
             await session.refresh(record)
 
-        # If approval required, dispatch notifications to Super Admins and Admins (both initial and resumed check-ins)
+        # If approval required, dispatch notifications to Super Admins, Admins, In-Charges and Team Leaders
         if record.requires_approval and record.approval_status == "PENDING":
             try:
                 from app.services.notification_service import NotificationService
                 user_branch_clean = user.branch.strip().lower() if user.branch and user.branch.strip() else None
+                user_dept_clean = user.department.strip().lower() if user.department and user.department.strip() else None
+
+                notif_conditions = [
+                    User.role == Role.SUPER_ADMIN,
+                    and_(
+                        User.role == Role.ADMIN,
+                        or_(
+                            func.lower(func.trim(User.branch)) == user_branch_clean,
+                            User.branch.is_(None),
+                        ) if user_branch_clean else True,
+                    ),
+                ]
+
+                # In-Charge notifications (same branch and/or department, or direct report)
+                in_charge_conds = []
                 if user_branch_clean:
-                    branch_condition = or_(
-                        func.lower(func.trim(User.branch)) == user_branch_clean,
-                        User.branch.is_(None),
-                    )
-                else:
-                    branch_condition = True
+                    in_charge_conds.append(func.lower(func.trim(User.branch)) == user_branch_clean)
+                if user_dept_clean:
+                    in_charge_conds.append(func.lower(func.trim(User.department)) == user_dept_clean)
+                if user.reports_to_id:
+                    in_charge_conds.append(User.id == user.reports_to_id)
+                if in_charge_conds:
+                    notif_conditions.append(and_(User.role == Role.IN_CHARGE, or_(*in_charge_conds)))
+
+                # Team Leader notifications (direct subordinate or same department)
+                tl_conds = []
+                if user.reports_to_id:
+                    tl_conds.append(User.id == user.reports_to_id)
+                if user_dept_clean:
+                    tl_conds.append(func.lower(func.trim(User.department)) == user_dept_clean)
+                if tl_conds:
+                    notif_conditions.append(and_(User.role == Role.TEAM_LEADER, or_(*tl_conds)))
 
                 admin_stmt = select(User).where(
-                    or_(
-                        User.role == Role.SUPER_ADMIN,
-                        and_(User.role == Role.ADMIN, branch_condition),
-                    ),
+                    or_(*notif_conditions),
                     User.is_active == True,
                     User.id != user.id,
                 )

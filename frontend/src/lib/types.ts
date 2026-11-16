@@ -655,6 +655,40 @@ export interface NotificationListResponse {
   unread_count: number;
 }
 
+export interface PendingTaskSummaryItem {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  due_date?: string | null;
+  is_overdue: boolean;
+  is_due_today: boolean;
+  assigned_to_id?: string | null;
+  assigned_to_name: string;
+  assigned_to_role: string;
+}
+
+export interface UserPendingSummary {
+  user_id: string;
+  full_name: string;
+  email: string;
+  role: string;
+  branch?: string | null;
+  department?: string | null;
+  user_pending_tasks: PendingTaskSummaryItem[];
+  subordinates_count: number;
+  subordinates_pending_tasks: PendingTaskSummaryItem[];
+}
+
+export interface ApprovalPendingContext {
+  task_id: string;
+  task_title: string;
+  approver?: UserPendingSummary | null;
+  assignee?: UserPendingSummary | null;
+  primary_user: UserPendingSummary;
+  total_pending_count: number;
+}
+
 
 
 

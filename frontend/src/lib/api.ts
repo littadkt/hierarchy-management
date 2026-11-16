@@ -47,6 +47,7 @@ import {
   BufferStatus,
   AppNotification,
   NotificationListResponse,
+  ApprovalPendingContext,
 } from "./types";
 
 /**
@@ -540,6 +541,10 @@ export const approvalsApi = {
       action,
       comments,
     });
+    return response.data;
+  },
+  getPendingContext: async (taskId: string): Promise<ApprovalPendingContext> => {
+    const response = await api.get(`/approvals/${taskId}/pending-context`);
     return response.data;
   },
 };
@@ -1053,6 +1058,7 @@ export const attendanceApi = {
           longitude?: number | null;
           accuracy?: number | null;
           wifi_ssid?: string | null;
+          client_ip?: string | null;
         }
       | string
   ): Promise<AttendanceRecord> => {

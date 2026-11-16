@@ -23,11 +23,13 @@ import {
   LogIn,
   Check,
   Building2,
+  Clock,
+  Loader2,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
 import { approvalsApi, attendanceApi, usersApi, branchesApi, getErrorMessage } from "@/lib/api";
-import { Task, UserBrief, AttendanceRecord, Branch } from "@/lib/types";
+import { Task, UserBrief, AttendanceRecord, Branch, Role, ApprovalPendingContext } from "@/lib/types";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { RoleBadge } from "@/components/RoleBadge";
 import { TaskDetailModal } from "@/components/TaskDetailModal";
@@ -87,6 +89,9 @@ export default function ApprovalsPage() {
   const [decisionNotes, setDecisionNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [selectedDetailId, setSelectedDetailId] = useState<string | null>(null);
+  const [pendingContext, setPendingContext] = useState<ApprovalPendingContext | null>(null);
+  const [loadingPendingContext, setLoadingPendingContext] = useState(false);
+  const [pendingContextError, setPendingContextError] = useState<string | null>(null);
 
   const loadApprovals = async (silent = false) => {
     if (user?.role === "STAFF") {
@@ -219,6 +224,27 @@ export default function ApprovalsPage() {
     }
   };
 
+  const handleOpenTaskDecision = async (t: Task, action: "APPROVE" | "REJECT") => {
+    setActiveTask(t);
+    setDecisionAction(action);
+    setDecisionNotes("");
+    setPendingContext(null);
+    setPendingContextError(null);
+
+    if (action === "APPROVE" && user?.role === "SUPER_ADMIN") {
+      setLoadingPendingContext(true);
+      try {
+        const ctx = await approvalsApi.getPendingContext(t.id);
+        setPendingContext(ctx);
+      } catch (err) {
+        console.error("Failed to load approval pending context:", err);
+        setPendingContextError(getErrorMessage(err));
+      } finally {
+        setLoadingPendingContext(false);
+      }
+    }
+  };
+
   const handleDecisionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTask) return;
@@ -227,6 +253,7 @@ export default function ApprovalsPage() {
     try {
       await approvalsApi.decide(activeTask.id, decisionAction, decisionNotes);
       setActiveTask(null);
+      setPendingContext(null);
       setDecisionNotes("");
       await loadApprovals();
     } catch (err) {
@@ -1052,21 +1079,15 @@ export default function ApprovalsPage() {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <button
-                            onClick={() => {
-                              setActiveTask(t);
-                              setDecisionAction("REJECT");
-                            }}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 flex items-center gap-1"
+                            onClick={() => handleOpenTaskDecision(t, "REJECT")}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 flex items-center gap-1 cursor-pointer"
                           >
                             <XCircle className="w-3.5 h-3.5" />
                             <span>Reject</span>
                           </button>
                           <button
-                            onClick={() => {
-                              setActiveTask(t);
-                              setDecisionAction("APPROVE");
-                            }}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 flex items-center gap-1 shadow-xs"
+                            onClick={() => handleOpenTaskDecision(t, "APPROVE")}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 flex items-center gap-1 shadow-xs cursor-pointer"
                           >
                             <CheckCircle2 className="w-3.5 h-3.5" />
                             <span>Approve</span>
@@ -1312,62 +1333,402 @@ export default function ApprovalsPage() {
         {/* Task Decision Modal */}
         {activeTask && (
           <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-md shadow-2xl p-5 sm:p-6 space-y-4 my-auto max-h-[90vh] overflow-y-auto">
-              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                {decisionAction === "APPROVE" ? (
-                  <>
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                    <span>Approve & Close Task</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="w-5 h-5 text-rose-600" />
-                    <span>Reject Task (Return to In Progress)</span>
-                  </>
-                )}
-              </h3>
-              <p className="text-xs text-slate-600 dark:text-slate-400">
-                Task: <strong className="text-slate-900 dark:text-white">{activeTask.title}</strong>
-              </p>
+            <div
+              className={`bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full shadow-2xl p-5 sm:p-6 space-y-4 my-auto max-h-[90vh] overflow-y-auto ${
+                user?.role === "SUPER_ADMIN" && decisionAction === "APPROVE" ? "max-w-2xl" : "max-w-md"
+              }`}
+            >
+              {user?.role === "SUPER_ADMIN" && decisionAction === "APPROVE" ? (
+                <>
+                  <div className="flex items-start justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                        <ShieldAlert className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <span>Super Admin Approval Override</span>
+                        </h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          Review pending tasks for this user and their subordinates before confirming approval.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTask(null);
+                        setPendingContext(null);
+                      }}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
-                  Review Feedback / Comments
-                </label>
-                <textarea
-                  rows={3}
-                  value={decisionNotes}
-                  onChange={(e) => setDecisionNotes(e.target.value)}
-                  placeholder={
-                    decisionAction === "APPROVE"
-                      ? "Optional praise or completion note..."
-                      : "Explain what revisions or changes are required before this task can be approved..."
-                  }
-                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 text-xs flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <span className="text-slate-400 font-medium">Task: </span>
+                      <strong className="text-slate-900 dark:text-white font-semibold">{activeTask.title}</strong>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {activeTask.priority && (
+                        <span
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                            activeTask.priority === "URGENT"
+                              ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
+                              : activeTask.priority === "HIGH"
+                              ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                              : "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300"
+                          }`}
+                        >
+                          {activeTask.priority}
+                        </span>
+                      )}
+                      {activeTask.due_date && (
+                        <span className="text-slate-500 text-[11px] flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          {new Date(activeTask.due_date).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveTask(null)}
-                  className="px-4 py-2 text-xs font-medium rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDecisionSubmit}
-                  disabled={submitting}
-                  className={`px-5 py-2 text-xs font-semibold rounded-xl text-white shadow-md ${
-                    decisionAction === "APPROVE"
-                      ? "bg-emerald-600 hover:bg-emerald-700"
-                      : "bg-rose-600 hover:bg-rose-700"
-                  }`}
-                >
-                  {submitting ? "Processing..." : `Confirm ${decisionAction}`}
-                </button>
-              </div>
+                  {loadingPendingContext && (
+                    <div className="py-8 flex flex-col items-center justify-center gap-2 text-slate-500">
+                      <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                      <p className="text-xs font-medium">Loading hierarchy & pending tasks context...</p>
+                    </div>
+                  )}
+
+                  {pendingContextError && (
+                    <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="font-semibold">Unable to fetch pending context</p>
+                        <p className="text-[11px]">{pendingContextError}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {pendingContext && !loadingPendingContext && (
+                    <div className="space-y-4">
+                      {/* User Context Info Card */}
+                      <div className="p-3 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/60 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <UserCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            <span className="text-slate-500 dark:text-slate-400">
+                              {pendingContext.approver ? "Designated Approver:" : "Assigned User:"}
+                            </span>
+                            <strong className="text-slate-900 dark:text-white font-semibold">
+                              {pendingContext.primary_user.full_name}
+                            </strong>
+                            <RoleBadge role={pendingContext.primary_user.role as Role} />
+                            {pendingContext.primary_user.branch && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 font-medium">
+                                {pendingContext.primary_user.branch}
+                              </span>
+                            )}
+                          </div>
+                          {pendingContext.assignee &&
+                            pendingContext.approver &&
+                            pendingContext.assignee.user_id !== pendingContext.approver.user_id && (
+                              <span className="text-[11px] text-slate-500">
+                                Assignee:{" "}
+                                <strong className="text-slate-700 dark:text-slate-300">
+                                  {pendingContext.assignee.full_name}
+                                </strong>{" "}
+                                ({pendingContext.assignee.role})
+                              </span>
+                            )}
+                        </div>
+                      </div>
+
+                      {/* Section 1: Tasks Pending for that user */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+                            <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                            <span>Tasks Pending for {pendingContext.primary_user.full_name}</span>
+                          </div>
+                          <span
+                            className={`text-[11px] px-2 py-0.5 rounded-full font-bold ${
+                              pendingContext.primary_user.user_pending_tasks.length > 0
+                                ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                            }`}
+                          >
+                            {pendingContext.primary_user.user_pending_tasks.length} pending
+                          </span>
+                        </div>
+
+                        {pendingContext.primary_user.user_pending_tasks.length === 0 ? (
+                          <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>No pending tasks for this user.</span>
+                          </div>
+                        ) : (
+                          <div className="max-h-36 overflow-y-auto space-y-1.5 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 bg-slate-50/50 dark:bg-slate-900/40 divide-y divide-slate-100 dark:divide-slate-800">
+                            {pendingContext.primary_user.user_pending_tasks.map((item) => (
+                              <div
+                                key={item.id}
+                                className="pt-1.5 first:pt-0 flex items-center justify-between text-xs gap-2"
+                              >
+                                <div className="truncate flex-1 min-w-0">
+                                  <span className="font-semibold text-slate-800 dark:text-slate-200 truncate block">
+                                    {item.title}
+                                  </span>
+                                  <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5">
+                                    <span className="capitalize">
+                                      {item.status.toLowerCase().replace(/_/g, " ")}
+                                    </span>
+                                    {item.due_date && (
+                                      <>
+                                        <span>•</span>
+                                        <span>Due: {new Date(item.due_date).toLocaleDateString()}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {item.is_overdue && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                                      Overdue
+                                    </span>
+                                  )}
+                                  {item.is_due_today && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                                      Due Today
+                                    </span>
+                                  )}
+                                  <span
+                                    className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                                      item.priority === "URGENT" || item.priority === "HIGH"
+                                        ? "bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300"
+                                        : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                                    }`}
+                                  >
+                                    {item.priority}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Section 2: Tasks Pending for subordinates */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between pt-1">
+                          <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+                            <Users className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                            <span>
+                              Tasks Pending for Users Under Him ({pendingContext.primary_user.subordinates_count}{" "}
+                              subordinates)
+                            </span>
+                          </div>
+                          <span
+                            className={`text-[11px] px-2 py-0.5 rounded-full font-bold ${
+                              pendingContext.primary_user.subordinates_pending_tasks.length > 0
+                                ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                            }`}
+                          >
+                            {pendingContext.primary_user.subordinates_pending_tasks.length} pending
+                          </span>
+                        </div>
+
+                        {pendingContext.primary_user.subordinates_count === 0 ? (
+                          <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+                            No subordinate employees report directly or indirectly under this user.
+                          </div>
+                        ) : pendingContext.primary_user.subordinates_pending_tasks.length === 0 ? (
+                          <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>All subordinate tasks are completed.</span>
+                          </div>
+                        ) : (
+                          <div className="max-h-44 overflow-y-auto space-y-2 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 bg-slate-50/50 dark:bg-slate-900/40 divide-y divide-slate-100 dark:divide-slate-800">
+                            {pendingContext.primary_user.subordinates_pending_tasks.map((subTask) => (
+                              <div
+                                key={subTask.id}
+                                className="pt-2 first:pt-0 flex items-start justify-between text-xs gap-2"
+                              >
+                                <div className="truncate flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-semibold text-slate-900 dark:text-white truncate">
+                                      {subTask.assigned_to_name}
+                                    </span>
+                                    <RoleBadge role={subTask.assigned_to_role as Role} />
+                                  </div>
+                                  <p className="text-slate-700 dark:text-slate-300 text-xs font-medium truncate mt-0.5">
+                                    {subTask.title}
+                                  </p>
+                                  <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5">
+                                    <span className="capitalize">
+                                      {subTask.status.toLowerCase().replace(/_/g, " ")}
+                                    </span>
+                                    {subTask.due_date && (
+                                      <>
+                                        <span>•</span>
+                                        <span>Due: {new Date(subTask.due_date).toLocaleDateString()}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
+                                  {subTask.is_overdue && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                                      Overdue
+                                    </span>
+                                  )}
+                                  {subTask.is_due_today && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                                      Due Today
+                                    </span>
+                                  )}
+                                  <span
+                                    className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                                      subTask.priority === "URGENT" || subTask.priority === "HIGH"
+                                        ? "bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300"
+                                        : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                                    }`}
+                                  >
+                                    {subTask.priority}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Notice / Confirmation Banner */}
+                      {pendingContext.total_pending_count > 0 ? (
+                        <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs flex items-start gap-2.5">
+                          <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-semibold">Super Admin Override Notice</p>
+                            <p className="text-[11px] mt-0.5 leading-relaxed">
+                              There are {pendingContext.total_pending_count} pending task(s) remaining for this user
+                              and their subordinates. Confirming will approve and close this task, overriding standard
+                              subordinate task completion requirements.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs flex items-center gap-2.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>All tasks for this user and subordinates are completed. Safe to approve.</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                      Review Feedback / Comments (Optional)
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={decisionNotes}
+                      onChange={(e) => setDecisionNotes(e.target.value)}
+                      placeholder="Optional approval note or praise..."
+                      className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTask(null);
+                        setPendingContext(null);
+                      }}
+                      className="px-4 py-2 text-xs font-medium rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDecisionSubmit}
+                      disabled={submitting || loadingPendingContext}
+                      className="px-5 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-md flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>
+                        {submitting
+                          ? "Processing..."
+                          : pendingContext?.total_pending_count && pendingContext.total_pending_count > 0
+                          ? "Confirm & Override Approval"
+                          : "Confirm & Approve Task"}
+                      </span>
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    {decisionAction === "APPROVE" ? (
+                      <>
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                        <span>Approve & Close Task</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-5 h-5 text-rose-600" />
+                        <span>Reject Task (Return to In Progress)</span>
+                      </>
+                    )}
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Task: <strong className="text-slate-900 dark:text-white">{activeTask.title}</strong>
+                  </p>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                      Review Feedback / Comments
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={decisionNotes}
+                      onChange={(e) => setDecisionNotes(e.target.value)}
+                      placeholder={
+                        decisionAction === "APPROVE"
+                          ? "Optional praise or completion note..."
+                          : "Explain what revisions or changes are required before this task can be approved..."
+                      }
+                      className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTask(null);
+                        setPendingContext(null);
+                      }}
+                      className="px-4 py-2 text-xs font-medium rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDecisionSubmit}
+                      disabled={submitting}
+                      className={`px-5 py-2 text-xs font-semibold rounded-xl text-white shadow-md cursor-pointer ${
+                        decisionAction === "APPROVE"
+                          ? "bg-emerald-600 hover:bg-emerald-700"
+                          : "bg-rose-600 hover:bg-rose-700"
+                      }`}
+                    >
+                      {submitting ? "Processing..." : `Confirm ${decisionAction}`}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
