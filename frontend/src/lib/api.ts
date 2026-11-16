@@ -47,6 +47,59 @@ import {
   BufferStatus,
   AppNotification,
   NotificationListResponse,
+  ProductServiceTicket,
+  RentalProduct,
+  RentalBooking,
+  SapSalesOrder,
+  SapDashboardStats,
+  SapGlAccount,
+  SapJournalEntry,
+  SapCostCenter,
+  SapProfitCenter,
+  SapMaterialMaster,
+  SapPurchaseRequisition,
+  SapQuotation,
+  SapHcmEmployee,
+  SapProductionOrder,
+  SapBomItem,
+  SapWarehouseBin,
+  SapTransferOrder,
+  SapAbapScript,
+  SapAbapRunResponse,
+  SapTaxRate,
+  SapTaxLedger,
+  SapTaxSummary,
+  SapCustomer,
+  SapCustomerEnquiry,
+  SapInvoice,
+  SapOutboundDelivery,
+  SapPosSale,
+  SapVendor,
+  SapPurchaseOrder,
+  SapGoodsReceipt,
+  SapVendorBill,
+  SapDebitNote,
+  SapStockTransfer,
+  SapStockMovement,
+  SapStockTaking,
+  SapDamagedItem,
+  SapPriceChange,
+  SapAccountingVoucher,
+  SapBankReconciliation,
+  SapVoucherFormat,
+  SapDataMigration,
+  SapTrialBalanceReport,
+  SapProfitLossReport,
+  SapBalanceSheetReport,
+  SapReceivablesAgeingReport,
+  SapSalesRegisterReport,
+  CrmLead,
+  CrmDeal,
+  CrmCustomer,
+  CrmTicket,
+  CrmDashboardStats,
+  CrmAiChatResponse,
+  CrmAiDraftResponse,
 } from "./types";
 
 /**
@@ -131,16 +184,16 @@ api.interceptors.response.use(
 );
 
 // Helper for extracting clean error message
-export const getErrorMessage = (error: unknown): string => {
+export const getErrorMessage = (error: unknown, fallback?: string): string => {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
     if (typeof detail === "string") return detail;
     if (Array.isArray(detail)) {
       return detail.map((d: { msg?: string }) => d.msg || JSON.stringify(d)).join(", ");
     }
-    return error.response?.data?.message || error.message || "An error occurred";
+    return error.response?.data?.message || error.message || fallback || "An error occurred";
   }
-  return (error as Error)?.message || "An unexpected error occurred";
+  return (error as Error)?.message || fallback || "An unexpected error occurred";
 };
 
 // API Services
@@ -1385,6 +1438,673 @@ export const notificationsApi = {
     return response.data;
   },
 };
+
+// ==========================================
+// SAP ERP API SERVICES
+// ==========================================
+export const sapApi = {
+  getDashboardStats: async (): Promise<SapDashboardStats> => {
+    const response = await api.get("/sap/dashboard");
+    return response.data;
+  },
+
+  // Service Tickets
+  listServices: async (params?: {
+    search?: string;
+    status?: string;
+    service_type?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<{ items: ProductServiceTicket[]; total: number }> => {
+    const response = await api.get("/sap/services", { params });
+    return response.data;
+  },
+  getService: async (id: string): Promise<ProductServiceTicket> => {
+    const response = await api.get(`/sap/services/${id}`);
+    return response.data;
+  },
+  createService: async (data: Partial<ProductServiceTicket>): Promise<ProductServiceTicket> => {
+    const response = await api.post("/sap/services", data);
+    return response.data;
+  },
+  updateService: async (id: string, data: Partial<ProductServiceTicket>): Promise<ProductServiceTicket> => {
+    const response = await api.put(`/sap/services/${id}`, data);
+    return response.data;
+  },
+  deleteService: async (id: string): Promise<{ message: string }> => {
+    const response = await api.delete(`/sap/services/${id}`);
+    return response.data;
+  },
+
+  // Rental Products
+  listRentalProducts: async (params?: {
+    category?: string;
+    search?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<{ items: RentalProduct[]; total: number }> => {
+    const response = await api.get("/sap/rentals/products", { params });
+    return response.data;
+  },
+  getRentalProduct: async (id: string): Promise<RentalProduct> => {
+    const response = await api.get(`/sap/rentals/products/${id}`);
+    return response.data;
+  },
+  createRentalProduct: async (data: Partial<RentalProduct>): Promise<RentalProduct> => {
+    const response = await api.post("/sap/rentals/products", data);
+    return response.data;
+  },
+  updateRentalProduct: async (id: string, data: Partial<RentalProduct>): Promise<RentalProduct> => {
+    const response = await api.put(`/sap/rentals/products/${id}`, data);
+    return response.data;
+  },
+  deleteRentalProduct: async (id: string): Promise<{ message: string }> => {
+    const response = await api.delete(`/sap/rentals/products/${id}`);
+    return response.data;
+  },
+
+  // Rental Bookings
+  listRentalBookings: async (params?: {
+    status?: string;
+    search?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<{ items: RentalBooking[]; total: number }> => {
+    const response = await api.get("/sap/rentals/bookings", { params });
+    return response.data;
+  },
+  createRentalBooking: async (data: Partial<RentalBooking>): Promise<RentalBooking> => {
+    const response = await api.post("/sap/rentals/bookings", data);
+    return response.data;
+  },
+  updateRentalBooking: async (id: string, data: Partial<RentalBooking>): Promise<RentalBooking> => {
+    const response = await api.put(`/sap/rentals/bookings/${id}`, data);
+    return response.data;
+  },
+
+  // Sales Orders
+  listSalesOrders: async (params?: {
+    status?: string;
+    search?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<{ items: SapSalesOrder[]; total: number }> => {
+    const response = await api.get("/sap/sales", { params });
+    return response.data;
+  },
+  createSalesOrder: async (data: Partial<SapSalesOrder>): Promise<SapSalesOrder> => {
+    const response = await api.post("/sap/sales", data);
+    return response.data;
+  },
+  updateSalesOrder: async (id: string, data: Partial<SapSalesOrder>): Promise<SapSalesOrder> => {
+    const response = await api.put(`/sap/sales/${id}`, data);
+    return response.data;
+  },
+
+  // 1. SAP FI - Financial Accounting
+  listGlAccounts: async (params?: { account_type?: string; search?: string }): Promise<SapGlAccount[]> => {
+    const response = await api.get("/sap/fi/gl-accounts", { params });
+    return response.data;
+  },
+  createGlAccount: async (data: Partial<SapGlAccount>): Promise<SapGlAccount> => {
+    const response = await api.post("/sap/fi/gl-accounts", data);
+    return response.data;
+  },
+  listJournalEntries: async (params?: { search?: string; limit?: number }): Promise<SapJournalEntry[]> => {
+    const response = await api.get("/sap/fi/journal-entries", { params });
+    return response.data;
+  },
+  createJournalEntry: async (data: Partial<SapJournalEntry>): Promise<SapJournalEntry> => {
+    const response = await api.post("/sap/fi/journal-entries", data);
+    return response.data;
+  },
+
+  // 2. SAP CO - Cost & Profit Management
+  listCostCenters: async (params?: { search?: string }): Promise<SapCostCenter[]> => {
+    const response = await api.get("/sap/co/cost-centers", { params });
+    return response.data;
+  },
+  createCostCenter: async (data: Partial<SapCostCenter>): Promise<SapCostCenter> => {
+    const response = await api.post("/sap/co/cost-centers", data);
+    return response.data;
+  },
+  listProfitCenters: async (params?: { search?: string }): Promise<SapProfitCenter[]> => {
+    const response = await api.get("/sap/co/profit-centers", { params });
+    return response.data;
+  },
+  createProfitCenter: async (data: Partial<SapProfitCenter>): Promise<SapProfitCenter> => {
+    const response = await api.post("/sap/co/profit-centers", data);
+    return response.data;
+  },
+
+  // 3. SAP MM - Material Management
+  listMaterials: async (params?: { material_type?: string; search?: string }): Promise<SapMaterialMaster[]> => {
+    const response = await api.get("/sap/mm/materials", { params });
+    return response.data;
+  },
+  createMaterial: async (data: Partial<SapMaterialMaster>): Promise<SapMaterialMaster> => {
+    const response = await api.post("/sap/mm/materials", data);
+    return response.data;
+  },
+  listPurchaseRequisitions: async (params?: { status?: string; search?: string }): Promise<SapPurchaseRequisition[]> => {
+    const response = await api.get("/sap/mm/purchase-requisitions", { params });
+    return response.data;
+  },
+  listPurchaseReqs: async (params?: { status?: string; search?: string }): Promise<SapPurchaseRequisition[]> => {
+    const response = await api.get("/sap/mm/purchase-requisitions", { params });
+    return response.data;
+  },
+  createPurchaseRequisition: async (data: Partial<SapPurchaseRequisition>): Promise<SapPurchaseRequisition> => {
+    const response = await api.post("/sap/mm/purchase-requisitions", data);
+    return response.data;
+  },
+  createPurchaseReq: async (data: Partial<SapPurchaseRequisition>): Promise<SapPurchaseRequisition> => {
+    const response = await api.post("/sap/mm/purchase-requisitions", data);
+    return response.data;
+  },
+  updatePurchaseReqStatus: async (id: string, status: string): Promise<SapPurchaseRequisition> => {
+    const response = await api.put(`/sap/mm/purchase-requisitions/${id}`, { status });
+    return response.data;
+  },
+
+  // 4. SAP SD - Sales & Distribution (Quotations)
+  listQuotations: async (params?: { status?: string; search?: string }): Promise<SapQuotation[]> => {
+    const response = await api.get("/sap/sd/quotations", { params });
+    return response.data;
+  },
+  createQuotation: async (data: Partial<SapQuotation>): Promise<SapQuotation> => {
+    const response = await api.post("/sap/sd/quotations", data);
+    return response.data;
+  },
+  updateQuotationStatus: async (id: string, status: string): Promise<SapQuotation> => {
+    const response = await api.put(`/sap/sd/quotations/${id}`, { status });
+    return response.data;
+  },
+
+  // 5. SAP HCM - Human Resource Management
+  listHcmEmployees: async (params?: { department?: string; search?: string }): Promise<SapHcmEmployee[]> => {
+    const response = await api.get("/sap/hcm/employees", { params });
+    return response.data;
+  },
+  createHcmEmployee: async (data: Partial<SapHcmEmployee>): Promise<SapHcmEmployee> => {
+    const response = await api.post("/sap/hcm/employees", data);
+    return response.data;
+  },
+
+  // 6. SAP PP - Production Planning
+  listProductionOrders: async (params?: { status?: string; search?: string }): Promise<SapProductionOrder[]> => {
+    const response = await api.get("/sap/pp/production-orders", { params });
+    return response.data;
+  },
+  createProductionOrder: async (data: Partial<SapProductionOrder>): Promise<SapProductionOrder> => {
+    const response = await api.post("/sap/pp/production-orders", data);
+    return response.data;
+  },
+  updateProductionOrderStatus: async (id: string, status: string): Promise<SapProductionOrder> => {
+    const response = await api.put(`/sap/pp/production-orders/${id}`, { status });
+    return response.data;
+  },
+  listBomItems: async (params?: { bom_code?: string; search?: string }): Promise<SapBomItem[]> => {
+    const response = await api.get("/sap/pp/bom-items", { params });
+    return response.data;
+  },
+  createBomItem: async (data: Partial<SapBomItem>): Promise<SapBomItem> => {
+    const response = await api.post("/sap/pp/bom-items", data);
+    return response.data;
+  },
+
+  // 7. SAP WM - Warehouse Management
+  listWarehouseBins: async (params?: { zone?: string; warehouse_zone?: string; status?: string; search?: string }): Promise<SapWarehouseBin[]> => {
+    const queryParams: Record<string, any> = { ...params };
+    if (params?.warehouse_zone && !params.zone) {
+      queryParams.zone = params.warehouse_zone;
+    }
+    const response = await api.get("/sap/wm/warehouse-bins", { params: queryParams });
+    return response.data;
+  },
+  createWarehouseBin: async (data: Partial<SapWarehouseBin>): Promise<SapWarehouseBin> => {
+    const response = await api.post("/sap/wm/warehouse-bins", data);
+    return response.data;
+  },
+  listTransferOrders: async (params?: { status?: string; search?: string }): Promise<SapTransferOrder[]> => {
+    const response = await api.get("/sap/wm/transfer-orders", { params });
+    return response.data;
+  },
+  createTransferOrder: async (data: Partial<SapTransferOrder>): Promise<SapTransferOrder> => {
+    const response = await api.post("/sap/wm/transfer-orders", data);
+    return response.data;
+  },
+  updateTransferOrderStatus: async (id: string, status: string): Promise<SapTransferOrder> => {
+    const response = await api.put(`/sap/wm/transfer-orders/${id}`, { status });
+    return response.data;
+  },
+
+  // 8. SAP ABAP - Programming Workbench
+  listAbapScripts: async (params?: { module?: string; search?: string }): Promise<SapAbapScript[]> => {
+    const response = await api.get("/sap/abap/scripts", { params });
+    return response.data;
+  },
+  createAbapScript: async (data: Partial<SapAbapScript>): Promise<SapAbapScript> => {
+    const response = await api.post("/sap/abap/scripts", data);
+    return response.data;
+  },
+  runAbapScript: async (scriptId: string, parameters?: Record<string, any>): Promise<SapAbapRunResponse> => {
+    const response = await api.post(`/sap/abap/scripts/${scriptId}/run`, { parameters: parameters || {} });
+    return response.data;
+  },
+
+  // 9. TAX OPTION - Tax Slabs & Tax Ledgers
+  listTaxRates: async (params?: { search?: string }): Promise<SapTaxRate[]> => {
+    const response = await api.get("/sap/tax/rates", { params });
+    return response.data;
+  },
+  createTaxRate: async (data: Partial<SapTaxRate>): Promise<SapTaxRate> => {
+    const response = await api.post("/sap/tax/rates", data);
+    return response.data;
+  },
+  listTaxLedgers: async (params?: { entry_type?: string; source_module?: string; search?: string; limit?: number }): Promise<SapTaxLedger[]> => {
+    const response = await api.get("/sap/tax/ledgers", { params });
+    return response.data;
+  },
+  createTaxLedger: async (data: Partial<SapTaxLedger>): Promise<SapTaxLedger> => {
+    const response = await api.post("/sap/tax/ledgers", data);
+    return response.data;
+  },
+  getTaxSummary: async (): Promise<SapTaxSummary> => {
+    const response = await api.get("/sap/tax/summary");
+    return response.data;
+  },
+
+  // 10. SALES MODULE (CUSTOMERS, ENQUIRIES, INVOICES, DELIVERIES, POS)
+  listCustomers: async (params?: { search?: string; customer_group?: string; is_active?: boolean; skip?: number; limit?: number }): Promise<{ items: SapCustomer[]; total: number }> => {
+    const response = await api.get("/sap/customers", { params });
+    return response.data;
+  },
+  getCustomer: async (id: string): Promise<SapCustomer> => {
+    const response = await api.get(`/sap/customers/${id}`);
+    return response.data;
+  },
+  createCustomer: async (data: Partial<SapCustomer>): Promise<SapCustomer> => {
+    const response = await api.post("/sap/customers", data);
+    return response.data;
+  },
+  updateCustomer: async (id: string, data: Partial<SapCustomer>): Promise<SapCustomer> => {
+    const response = await api.patch(`/sap/customers/${id}`, data);
+    return response.data;
+  },
+
+  listEnquiries: async (params?: { search?: string; enquiry_status?: string; skip?: number; limit?: number }): Promise<{ items: SapCustomerEnquiry[]; total: number }> => {
+    const response = await api.get("/sap/enquiries", { params });
+    return response.data;
+  },
+  createEnquiry: async (data: Partial<SapCustomerEnquiry>): Promise<SapCustomerEnquiry> => {
+    const response = await api.post("/sap/enquiries", data);
+    return response.data;
+  },
+  updateEnquiry: async (id: string, data: Partial<SapCustomerEnquiry>): Promise<SapCustomerEnquiry> => {
+    const response = await api.patch(`/sap/enquiries/${id}`, data);
+    return response.data;
+  },
+
+  listInvoices: async (params?: { search?: string; invoice_type?: string; invoice_status?: string; skip?: number; limit?: number }): Promise<{ items: SapInvoice[]; total: number }> => {
+    const response = await api.get("/sap/invoices", { params });
+    return response.data;
+  },
+  getInvoice: async (id: string): Promise<SapInvoice> => {
+    const response = await api.get(`/sap/invoices/${id}`);
+    return response.data;
+  },
+  createInvoice: async (data: Partial<SapInvoice>): Promise<SapInvoice> => {
+    const response = await api.post("/sap/invoices", data);
+    return response.data;
+  },
+  updateInvoice: async (id: string, data: Partial<SapInvoice>): Promise<SapInvoice> => {
+    const response = await api.patch(`/sap/invoices/${id}`, data);
+    return response.data;
+  },
+  recordInvoicePayment: async (id: string, data: { amount_paid: number; payment_method?: string; notes?: string }): Promise<SapInvoice> => {
+    const response = await api.post(`/sap/invoices/${id}/payments`, data);
+    return response.data;
+  },
+
+  listDeliveries: async (params?: { search?: string; delivery_status?: string; skip?: number; limit?: number }): Promise<{ items: SapOutboundDelivery[]; total: number }> => {
+    const response = await api.get("/sap/deliveries", { params });
+    return response.data;
+  },
+  createDelivery: async (data: Partial<SapOutboundDelivery>): Promise<SapOutboundDelivery> => {
+    const response = await api.post("/sap/deliveries", data);
+    return response.data;
+  },
+  updateDelivery: async (id: string, data: Partial<SapOutboundDelivery>): Promise<SapOutboundDelivery> => {
+    const response = await api.patch(`/sap/deliveries/${id}`, data);
+    return response.data;
+  },
+
+  listPosSales: async (params?: { search?: string; payment_mode?: string; skip?: number; limit?: number }): Promise<{ items: SapPosSale[]; total: number }> => {
+    const response = await api.get("/sap/pos-sales", { params });
+    return response.data;
+  },
+  createPosSale: async (data: Partial<SapPosSale>): Promise<SapPosSale> => {
+    const response = await api.post("/sap/pos-sales", data);
+    return response.data;
+  },
+
+  // 11. PURCHASE MODULE (VENDORS, PO, GRN, AP BILLS, DEBIT NOTES)
+  listVendors: async (params?: { search?: string; category?: string; is_active?: boolean; skip?: number; limit?: number }): Promise<{ items: SapVendor[]; total: number }> => {
+    const response = await api.get("/sap/vendors", { params });
+    return response.data;
+  },
+  getVendor: async (id: string): Promise<SapVendor> => {
+    const response = await api.get(`/sap/vendors/${id}`);
+    return response.data;
+  },
+  createVendor: async (data: Partial<SapVendor>): Promise<SapVendor> => {
+    const response = await api.post("/sap/vendors", data);
+    return response.data;
+  },
+  updateVendor: async (id: string, data: Partial<SapVendor>): Promise<SapVendor> => {
+    const response = await api.patch(`/sap/vendors/${id}`, data);
+    return response.data;
+  },
+
+  listPurchaseOrders: async (params?: { search?: string; po_status?: string; skip?: number; limit?: number }): Promise<{ items: SapPurchaseOrder[]; total: number }> => {
+    const response = await api.get("/sap/purchase-orders", { params });
+    return response.data;
+  },
+  getPurchaseOrder: async (id: string): Promise<SapPurchaseOrder> => {
+    const response = await api.get(`/sap/purchase-orders/${id}`);
+    return response.data;
+  },
+  createPurchaseOrder: async (data: Partial<SapPurchaseOrder>): Promise<SapPurchaseOrder> => {
+    const response = await api.post("/sap/purchase-orders", data);
+    return response.data;
+  },
+  updatePurchaseOrder: async (id: string, data: Partial<SapPurchaseOrder>): Promise<SapPurchaseOrder> => {
+    const response = await api.patch(`/sap/purchase-orders/${id}`, data);
+    return response.data;
+  },
+
+  listGoodsReceipts: async (params?: { search?: string; po_reference?: string; skip?: number; limit?: number }): Promise<{ items: SapGoodsReceipt[]; total: number }> => {
+    const response = await api.get("/sap/goods-receipts", { params });
+    return response.data;
+  },
+  createGoodsReceipt: async (data: Partial<SapGoodsReceipt>): Promise<SapGoodsReceipt> => {
+    const response = await api.post("/sap/goods-receipts", data);
+    return response.data;
+  },
+
+  listVendorBills: async (params?: { search?: string; bill_status?: string; skip?: number; limit?: number }): Promise<{ items: SapVendorBill[]; total: number }> => {
+    const response = await api.get("/sap/vendor-bills", { params });
+    return response.data;
+  },
+  createVendorBill: async (data: Partial<SapVendorBill>): Promise<SapVendorBill> => {
+    const response = await api.post("/sap/vendor-bills", data);
+    return response.data;
+  },
+  updateVendorBill: async (id: string, data: Partial<SapVendorBill>): Promise<SapVendorBill> => {
+    const response = await api.patch(`/sap/vendor-bills/${id}`, data);
+    return response.data;
+  },
+
+  listDebitNotes: async (params?: { search?: string; skip?: number; limit?: number }): Promise<{ items: SapDebitNote[]; total: number }> => {
+    const response = await api.get("/sap/debit-notes", { params });
+    return response.data;
+  },
+  createDebitNote: async (data: Partial<SapDebitNote>): Promise<SapDebitNote> => {
+    const response = await api.post("/sap/debit-notes", data);
+    return response.data;
+  },
+
+  // 12. INVENTORY MODULE (TRANSFERS, MOVEMENTS, STOCK TAKING, DAMAGED, PRICE)
+  listStockTransfers: async (params?: { search?: string; status?: string; skip?: number; limit?: number }): Promise<{ items: SapStockTransfer[]; total: number }> => {
+    const response = await api.get("/sap/stock-transfers", { params });
+    return response.data;
+  },
+  createStockTransfer: async (data: Partial<SapStockTransfer>): Promise<SapStockTransfer> => {
+    const response = await api.post("/sap/stock-transfers", data);
+    return response.data;
+  },
+
+  listStockMovements: async (params?: { search?: string; movement_type?: string; skip?: number; limit?: number }): Promise<{ items: SapStockMovement[]; total: number }> => {
+    const response = await api.get("/sap/stock-movements", { params });
+    return response.data;
+  },
+  createStockMovement: async (data: Partial<SapStockMovement>): Promise<SapStockMovement> => {
+    const response = await api.post("/sap/stock-movements", data);
+    return response.data;
+  },
+
+  listStockTakings: async (params?: { search?: string; status?: string; skip?: number; limit?: number }): Promise<{ items: SapStockTaking[]; total: number }> => {
+    const response = await api.get("/sap/stock-takings", { params });
+    return response.data;
+  },
+  createStockTaking: async (data: Partial<SapStockTaking>): Promise<SapStockTaking> => {
+    const response = await api.post("/sap/stock-takings", data);
+    return response.data;
+  },
+
+  listDamagedItems: async (params?: { search?: string; skip?: number; limit?: number }): Promise<{ items: SapDamagedItem[]; total: number }> => {
+    const response = await api.get("/sap/damaged-items", { params });
+    return response.data;
+  },
+  createDamagedItem: async (data: Partial<SapDamagedItem>): Promise<SapDamagedItem> => {
+    const response = await api.post("/sap/damaged-items", data);
+    return response.data;
+  },
+
+  listPriceChanges: async (params?: { search?: string; skip?: number; limit?: number }): Promise<{ items: SapPriceChange[]; total: number }> => {
+    const response = await api.get("/sap/price-changes", { params });
+    return response.data;
+  },
+  createPriceChange: async (data: Partial<SapPriceChange>): Promise<SapPriceChange> => {
+    const response = await api.post("/sap/price-changes", data);
+    return response.data;
+  },
+
+  // 13. FINANCE MODULE (VOUCHERS, BRS, STATEMENTS)
+  listAccountingVouchers: async (params?: { voucher_type?: string; search?: string; skip?: number; limit?: number }): Promise<{ items: SapAccountingVoucher[]; total: number }> => {
+    const response = await api.get("/sap/accounting-vouchers", { params });
+    return response.data;
+  },
+  createAccountingVoucher: async (data: Partial<SapAccountingVoucher>): Promise<SapAccountingVoucher> => {
+    const response = await api.post("/sap/accounting-vouchers", data);
+    return response.data;
+  },
+
+  listBankReconciliations: async (params?: { bank_account?: string; search?: string; skip?: number; limit?: number }): Promise<{ items: SapBankReconciliation[]; total: number }> => {
+    const response = await api.get("/sap/bank-reconciliations", { params });
+    return response.data;
+  },
+  createBankReconciliation: async (data: Partial<SapBankReconciliation>): Promise<SapBankReconciliation> => {
+    const response = await api.post("/sap/bank-reconciliations", data);
+    return response.data;
+  },
+
+  // 14. FINANCIAL REPORTS
+  getTrialBalanceReport: async (): Promise<SapTrialBalanceReport> => {
+    const response = await api.get("/sap/reports/trial-balance");
+    return response.data;
+  },
+  getProfitLossReport: async (): Promise<SapProfitLossReport> => {
+    const response = await api.get("/sap/reports/profit-loss");
+    return response.data;
+  },
+  getBalanceSheetReport: async (): Promise<SapBalanceSheetReport> => {
+    const response = await api.get("/sap/reports/balance-sheet");
+    return response.data;
+  },
+  getReceivablesAgeingReport: async (): Promise<SapReceivablesAgeingReport> => {
+    const response = await api.get("/sap/reports/receivables-ageing");
+    return response.data;
+  },
+  getSalesRegisterReport: async (): Promise<SapSalesRegisterReport> => {
+    const response = await api.get("/sap/reports/sales-register");
+    return response.data;
+  },
+
+  // 15. ADMINISTRATION, FORMATS & DATA MIGRATION
+  listVoucherFormats: async (): Promise<SapVoucherFormat[]> => {
+    const response = await api.get("/sap/voucher-formats");
+    return response.data;
+  },
+  createVoucherFormat: async (data: Partial<SapVoucherFormat>): Promise<SapVoucherFormat> => {
+    const response = await api.post("/sap/voucher-formats", data);
+    return response.data;
+  },
+  listDataMigrations: async (): Promise<SapDataMigration[]> => {
+    const response = await api.get("/sap/data-migrations");
+    return response.data;
+  },
+  createDataMigration: async (data: Partial<SapDataMigration>): Promise<SapDataMigration> => {
+    const response = await api.post("/sap/data-migrations", data);
+    return response.data;
+  },
+};
+
+// ==========================================
+// CRM SUITE & AI API SERVICES
+// ==========================================
+export const crmApi = {
+  getDashboardStats: async (): Promise<CrmDashboardStats> => {
+    const response = await api.get("/crm/dashboard");
+    return response.data;
+  },
+
+  // Leads
+  listLeads: async (params?: {
+    search?: string;
+    status?: string;
+    source?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<{ items: CrmLead[]; total: number }> => {
+    const response = await api.get("/crm/leads", { params });
+    return response.data;
+  },
+  getLead: async (id: string): Promise<CrmLead> => {
+    const response = await api.get(`/crm/leads/${id}`);
+    return response.data;
+  },
+  createLead: async (data: Partial<CrmLead>): Promise<CrmLead> => {
+    const response = await api.post("/crm/leads", data);
+    return response.data;
+  },
+  updateLead: async (id: string, data: Partial<CrmLead>): Promise<CrmLead> => {
+    const response = await api.put(`/crm/leads/${id}`, data);
+    return response.data;
+  },
+  deleteLead: async (id: string): Promise<{ message: string }> => {
+    const response = await api.delete(`/crm/leads/${id}`);
+    return response.data;
+  },
+
+  // Deals
+  listDeals: async (params?: {
+    stage?: string;
+    search?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<{ items: CrmDeal[]; total: number }> => {
+    const response = await api.get("/crm/deals", { params });
+    return response.data;
+  },
+  getDeal: async (id: string): Promise<CrmDeal> => {
+    const response = await api.get(`/crm/deals/${id}`);
+    return response.data;
+  },
+  createDeal: async (data: Partial<CrmDeal>): Promise<CrmDeal> => {
+    const response = await api.post("/crm/deals", data);
+    return response.data;
+  },
+  updateDeal: async (id: string, data: Partial<CrmDeal>): Promise<CrmDeal> => {
+    const response = await api.put(`/crm/deals/${id}`, data);
+    return response.data;
+  },
+  deleteDeal: async (id: string): Promise<{ message: string }> => {
+    const response = await api.delete(`/crm/deals/${id}`);
+    return response.data;
+  },
+
+  // Customers 360
+  listCustomers: async (params?: {
+    search?: string;
+    tier?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<{ items: CrmCustomer[]; total: number }> => {
+    const response = await api.get("/crm/customers", { params });
+    return response.data;
+  },
+  getCustomer: async (id: string): Promise<CrmCustomer> => {
+    const response = await api.get(`/crm/customers/${id}`);
+    return response.data;
+  },
+  createCustomer: async (data: Partial<CrmCustomer>): Promise<CrmCustomer> => {
+    const response = await api.post("/crm/customers", data);
+    return response.data;
+  },
+  updateCustomer: async (id: string, data: Partial<CrmCustomer>): Promise<CrmCustomer> => {
+    const response = await api.put(`/crm/customers/${id}`, data);
+    return response.data;
+  },
+  deleteCustomer: async (id: string): Promise<{ message: string }> => {
+    const response = await api.delete(`/crm/customers/${id}`);
+    return response.data;
+  },
+
+  // Tickets
+  listTickets: async (params?: {
+    search?: string;
+    status?: string;
+    priority?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<{ items: CrmTicket[]; total: number }> => {
+    const response = await api.get("/crm/tickets", { params });
+    return response.data;
+  },
+  getTicket: async (id: string): Promise<CrmTicket> => {
+    const response = await api.get(`/crm/tickets/${id}`);
+    return response.data;
+  },
+  createTicket: async (data: Partial<CrmTicket>): Promise<CrmTicket> => {
+    const response = await api.post("/crm/tickets", data);
+    return response.data;
+  },
+  updateTicket: async (id: string, data: Partial<CrmTicket>): Promise<CrmTicket> => {
+    const response = await api.put(`/crm/tickets/${id}`, data);
+    return response.data;
+  },
+  deleteTicket: async (id: string): Promise<{ message: string }> => {
+    const response = await api.delete(`/crm/tickets/${id}`);
+    return response.data;
+  },
+
+  // AI Agent Endpoints
+  analyzeLead: async (leadId: string): Promise<any> => {
+    const response = await api.post(`/crm/ai/analyze-lead/${leadId}`);
+    return response.data;
+  },
+  analyzeDeal: async (dealId: string): Promise<any> => {
+    const response = await api.post(`/crm/ai/analyze-deal/${dealId}`);
+    return response.data;
+  },
+  draftContent: async (data: {
+    context_type: string;
+    recipient_name: string;
+    topic_or_subject: string;
+    additional_context?: string;
+    tone?: string;
+  }): Promise<CrmAiDraftResponse> => {
+    const response = await api.post("/crm/ai/draft", data);
+    return response.data;
+  },
+  chatCopilot: async (query: string, history?: any[]): Promise<CrmAiChatResponse> => {
+    const response = await api.post("/crm/ai/chat", { query, history });
+    return response.data;
+  },
+};
+
 
 
 

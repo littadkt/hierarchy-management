@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Menu,
   PanelLeftClose,
@@ -9,6 +10,11 @@ import {
   ShieldCheck,
   KeyRound,
   Download,
+  ChevronDown,
+  Boxes,
+  Sparkles,
+  Network,
+  Check,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -27,6 +33,26 @@ export const Navbar: React.FC = () => {
   const { isInstalled, promptInstall } = usePwa();
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+
+  const pathname = usePathname();
+  const router = useRouter();
+  const [isSwitcherOpen, setIsSwitcherOpen] = useState(false);
+  const switcherRef = useRef<HTMLDivElement>(null);
+
+  const isSap = pathname.startsWith("/sap");
+  const isCrm = pathname.startsWith("/crm");
+  const activeSuite = isSap ? "SAP" : isCrm ? "CRM" : "HIERARCHY";
+
+  // Close switcher on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (switcherRef.current && !switcherRef.current.contains(e.target as Node)) {
+        setIsSwitcherOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const refreshPendingCount = () => {
     if (user) {
@@ -96,6 +122,139 @@ export const Navbar: React.FC = () => {
             Logged in as
           </span>
           <RoleBadge role={user.role} />
+        </div>
+
+        {/* ========================================================= */}
+        {/* TOP BAR SUITE SWITCHER (SWITCHES IN SAME TAB) */}
+        {/* ========================================================= */}
+        <div className="relative" ref={switcherRef}>
+          <button
+            type="button"
+            onClick={() => setIsSwitcherOpen(!isSwitcherOpen)}
+            title="Switch Workspace Suite (Hierarchy, SAP ERP, CRM AI)"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer shadow-2xs ${
+              isSap
+                ? "bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/70 dark:text-emerald-300 dark:border-emerald-800 hover:bg-emerald-100"
+                : isCrm
+                ? "bg-purple-50 text-purple-800 border-purple-200 dark:bg-purple-950/70 dark:text-purple-300 dark:border-purple-800 hover:bg-purple-100"
+                : "bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950/70 dark:text-indigo-300 dark:border-indigo-800 hover:bg-indigo-100"
+            }`}
+          >
+            {isSap ? (
+              <>
+                <Boxes className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="hidden xs:inline">SAP ERP</span>
+                <span className="xs:hidden">SAP</span>
+              </>
+            ) : isCrm ? (
+              <>
+                <Sparkles className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />
+                <span className="hidden xs:inline">CRM & AI</span>
+                <span className="xs:hidden">CRM</span>
+              </>
+            ) : (
+              <>
+                <Network className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                <span className="hidden xs:inline">Hierarchy</span>
+                <span className="xs:hidden">HR</span>
+              </>
+            )}
+            <ChevronDown
+              className={`w-3.5 h-3.5 text-slate-400 dark:text-slate-500 transition-transform duration-200 ${
+                isSwitcherOpen ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+
+          {/* Switcher Dropdown (Switches in Same Tab) */}
+          {isSwitcherOpen && (
+            <div className="absolute left-0 mt-2 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl z-50 p-2 space-y-1 animate-in fade-in zoom-in-95 duration-150">
+              <div className="px-2.5 py-1 text-[10px] font-bold tracking-wider uppercase text-slate-400">
+                Switch Workspace Suite
+              </div>
+
+              {/* Hierarchy Option */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSwitcherOpen(false);
+                  router.push("/");
+                }}
+                className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition-colors cursor-pointer ${
+                  activeSuite === "HIERARCHY"
+                    ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-950 dark:text-indigo-200"
+                    : "hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                    <Network className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold leading-tight">Hierarchy Management</div>
+                    <div className="text-[10px] text-slate-400">Tasks, Attendance, Approvals</div>
+                  </div>
+                </div>
+                {activeSuite === "HIERARCHY" && (
+                  <Check className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                )}
+              </button>
+
+              {/* SAP ERP Option */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSwitcherOpen(false);
+                  router.push("/sap");
+                }}
+                className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition-colors cursor-pointer ${
+                  activeSuite === "SAP"
+                    ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-950 dark:text-emerald-200"
+                    : "hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                    <Boxes className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold leading-tight">SAP Business ERP</div>
+                    <div className="text-[10px] text-slate-400">Product Service & Fleet Rentals</div>
+                  </div>
+                </div>
+                {activeSuite === "SAP" && (
+                  <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                )}
+              </button>
+
+              {/* CRM & AI Option */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSwitcherOpen(false);
+                  router.push("/crm");
+                }}
+                className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition-colors cursor-pointer ${
+                  activeSuite === "CRM"
+                    ? "bg-purple-50 dark:bg-purple-950/50 text-purple-950 dark:text-purple-200"
+                    : "hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-purple-600 text-white flex items-center justify-center shrink-0">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold leading-tight">CRM 360 & Sales AI</div>
+                    <div className="text-[10px] text-slate-400">Leads, Deals & Smart Copilot</div>
+                  </div>
+                </div>
+                {activeSuite === "CRM" && (
+                  <Check className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

@@ -23,6 +23,7 @@ from app.db.init_db import (
     init_models,
     init_super_admin,
     init_warranty_defaults,
+    init_sap_crm_defaults,
 )
 from app.db.session import AsyncSessionLocal
 
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
         await init_departments(session)
         await init_demo_users(session)
         await init_warranty_defaults(session)
+        await init_sap_crm_defaults(session)
 
     logger.info("Starting background recurrence scheduler...")
     try:

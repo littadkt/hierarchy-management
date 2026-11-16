@@ -9,7 +9,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, pass: string) => Promise<void>;
+  login: (email: string, pass: string, redirect?: boolean) => Promise<User>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   hasPermission: (windowId: string, action: "add" | "display" | "edit" | "delete") => boolean;
@@ -66,14 +66,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener("storage", handleStorageChange);
   }, [router]);
 
-  const login = async (email: string, pass: string) => {
+  const login = async (email: string, pass: string, redirect: boolean = true): Promise<User> => {
     setLoading(true);
     try {
       const data = await authApi.login(email, pass);
       localStorage.setItem("token", data.access_token);
       setToken(data.access_token);
       setUser(data.user);
-      router.push("/");
+      if (redirect) {
+        router.push("/");
+      }
+      return data.user;
     } finally {
       setLoading(false);
     }

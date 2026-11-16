@@ -602,3 +602,399 @@ async def init_warranty_defaults(session: AsyncSession) -> None:
     await session.commit()
     logger.info("Warranty defaults verified/seeded successfully.")
 
+
+async def init_sap_crm_defaults(session: AsyncSession) -> None:
+    """Seed initial demo data for SAP (Product Service, Rentals, Sales) and CRM (Leads, Deals, Customers, Tickets)"""
+    from datetime import datetime, timezone, timedelta
+    from app.models.sap import (
+        ProductServiceTicket,
+        RentalProduct,
+        RentalBooking,
+        SapSalesOrder,
+    )
+    from app.models.crm import (
+        CrmLead,
+        CrmDeal,
+        CrmCustomer,
+        CrmTicket,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    # 1. Rental Products
+    existing_rental_prod = (await session.execute(select(RentalProduct))).scalars().first()
+    if not existing_rental_prod:
+        rental_products = [
+            RentalProduct(
+                product_code="RNT-GEN-01",
+                name="Caterpillar 30kVA Silent Diesel Generator",
+                category="Generators",
+                daily_rate=2500.0,
+                weekly_rate=14000.0,
+                monthly_rate=48000.0,
+                security_deposit=15000.0,
+                total_quantity=4,
+                available_quantity=3,
+                condition_status="EXCELLENT",
+                description="Heavy duty soundproof diesel generator with automatic transfer switch.",
+            ),
+            RentalProduct(
+                product_code="RNT-TOOL-02",
+                name="Hilti TE 70-ATC SDS-Max Breaker & Hammer",
+                category="Power Tools",
+                daily_rate=950.0,
+                weekly_rate=5200.0,
+                monthly_rate=18000.0,
+                security_deposit=8000.0,
+                total_quantity=5,
+                available_quantity=4,
+                condition_status="EXCELLENT",
+                description="Heavy demolition combihammer with Active Torque Control and AVR.",
+            ),
+            RentalProduct(
+                product_code="RNT-SURV-03",
+                name="Bosch Professional Dual-Slope Rotary Laser Level",
+                category="Surveying Equipment",
+                daily_rate=600.0,
+                weekly_rate=3200.0,
+                monthly_rate=10500.0,
+                security_deposit=5000.0,
+                total_quantity=6,
+                available_quantity=5,
+                condition_status="EXCELLENT",
+                description="High precision outdoor laser level with digital grade receiver.",
+            ),
+            RentalProduct(
+                product_code="RNT-AV-04",
+                name="Sony Professional 4K Production Camera Kit",
+                category="Audio / Visual",
+                daily_rate=1800.0,
+                weekly_rate=9500.0,
+                monthly_rate=32000.0,
+                security_deposit=20000.0,
+                total_quantity=3,
+                available_quantity=2,
+                condition_status="GOOD",
+                description="Broadcast grade 3-chip 4K HDR camcorder with heavy tripod & dual wireless mic kit.",
+            ),
+            RentalProduct(
+                product_code="RNT-MACH-05",
+                name="Komatsu Mini Hydraulic Excavator 1.8T",
+                category="Heavy Machinery",
+                daily_rate=6500.0,
+                weekly_rate=38000.0,
+                monthly_rate=135000.0,
+                security_deposit=50000.0,
+                total_quantity=2,
+                available_quantity=1,
+                condition_status="EXCELLENT",
+                description="Compact zero tail-swing excavator for trenching, civil foundations and landscaping.",
+            ),
+        ]
+        session.add_all(rental_products)
+        await session.flush()
+
+        # Seed sample active booking
+        session.add(
+            RentalBooking(
+                booking_number="RNT-2026-0001",
+                rental_product_id=rental_products[0].id,
+                product_name=rental_products[0].name,
+                customer_name="Southern Infra Projects Ltd",
+                customer_phone="+91 94471 23456",
+                customer_id_proof="GSTIN: 32AABCS1429B1Z",
+                start_date=now - timedelta(days=2),
+                end_date=now + timedelta(days=5),
+                rate_type="DAILY",
+                rental_rate=2500.0,
+                quantity=1,
+                total_amount=17500.0,
+                security_deposit=15000.0,
+                status="ACTIVE",
+                notes="Delivered to Kakkanad metro extension jobsite.",
+            )
+        )
+
+    # 2. Product Service Tickets
+    existing_service = (await session.execute(select(ProductServiceTicket))).scalars().first()
+    if not existing_service:
+        services = [
+            ProductServiceTicket(
+                ticket_number="SRV-2026-0001",
+                customer_name="Metro Buildcon Kerala",
+                customer_phone="+91 98460 11223",
+                customer_email="plant@metrobuildcon.in",
+                product_name="Atlas Copco Air Compressor GA22",
+                serial_number="AC-2024-9912",
+                service_type="REPAIR",
+                priority="HIGH",
+                status="IN_REPAIR",
+                issue_description="Oil temperature warning triggers after 20 minutes continuous run.",
+                diagnostic_notes="Thermostatic valve stuck closed; oil cooler fins clogged with dust.",
+                parts_replaced="Thermostatic valve kit, synthetic compressor fluid",
+                parts_cost=8400.0,
+                service_charge=3500.0,
+                total_cost=11900.0,
+                assigned_technician_name="Alex Tech (Senior Tech)",
+                expected_delivery_date=now + timedelta(days=2),
+            ),
+            ProductServiceTicket(
+                ticket_number="SRV-2026-0002",
+                customer_name="Falcon Logistics Park",
+                customer_phone="+91 97455 33445",
+                customer_email="ops@falconlogistics.com",
+                product_name="Toyota 2.5T Electric Forklift",
+                serial_number="TY-FL-8831",
+                service_type="MAINTENANCE",
+                priority="MEDIUM",
+                status="DIAGNOSING",
+                issue_description="Routine 500-hour preventive service and mast hydraulic check.",
+                diagnostic_notes="Hydraulic pressure nominal; drive motor brush inspection underway.",
+                parts_cost=3200.0,
+                service_charge=2500.0,
+                total_cost=5700.0,
+                assigned_technician_name="Rohan Sharma (Service Engineer)",
+                expected_delivery_date=now + timedelta(days=3),
+            ),
+            ProductServiceTicket(
+                ticket_number="SRV-2026-0003",
+                customer_name="Dr. Varghese Healthcare",
+                customer_phone="+91 94950 55667",
+                customer_email="admin@varghesehealth.org",
+                product_name="Kirloskar 62.5kVA Standby Generator",
+                serial_number="KIR-GEN-4102",
+                service_type="AMC",
+                priority="URGENT",
+                status="READY",
+                issue_description="AVR output fluctuation causing voltage swings on Phase 2.",
+                diagnostic_notes="Replaced automatic voltage regulator and recalibrated sensing circuit.",
+                parts_replaced="Kirloskar OEM AVR Board Type EA05A",
+                parts_cost=9200.0,
+                service_charge=4000.0,
+                total_cost=13200.0,
+                assigned_technician_name="Alex Tech (Senior Tech)",
+                expected_delivery_date=now + timedelta(days=1),
+            ),
+        ]
+        session.add_all(services)
+
+    # 3. SAP Sales Orders
+    existing_sales = (await session.execute(select(SapSalesOrder))).scalars().first()
+    if not existing_sales:
+        orders = [
+            SapSalesOrder(
+                order_number="SO-2026-0001",
+                customer_name="Horizon Engineering Works",
+                customer_phone="+91 98470 66778",
+                customer_email="procurement@horizoneng.in",
+                order_date=now - timedelta(days=1),
+                total_amount=145000.0,
+                tax_amount=26100.0,
+                status="PROCESSING",
+                payment_status="PARTIALLY_PAID",
+                items_summary="2x Industrial Centrifugal Pumps, 4x High-pressure valves, 1x Control Panel",
+                notes="Delivery scheduled via Ernakulam dispatch warehouse.",
+            ),
+            SapSalesOrder(
+                order_number="SO-2026-0002",
+                customer_name="Apex Power Utilities",
+                customer_phone="+91 98460 99887",
+                customer_email="accounts@apexpower.org",
+                order_date=now - timedelta(days=3),
+                total_amount=88500.0,
+                tax_amount=15930.0,
+                status="CONFIRMED",
+                payment_status="PENDING",
+                items_summary="10x Industrial Power Relays, 500m Armored Copper Cable 4-Core",
+                notes="Net 30 commercial terms agreed upon.",
+            ),
+        ]
+        session.add_all(orders)
+
+    # 4. CRM Leads with AI Scores
+    existing_leads = (await session.execute(select(CrmLead))).scalars().first()
+    if not existing_leads:
+        leads = [
+            CrmLead(
+                lead_code="LED-2026-0001",
+                full_name="Rajesh Kumar",
+                company_name="Malabar Smart Infra Pvt Ltd",
+                email="rajesh.kumar@malabarsmart.in",
+                phone="+91 98471 55660",
+                source="REFERRAL",
+                status="QUALIFIED",
+                estimated_value=175000.0,
+                assigned_to_name="Alex Mercer (Admin)",
+                ai_score=88,
+                ai_qualification_summary="[High Priority (Hot Lead)] Verified corporate buyer expanding highway construction fleet. Budget ₹1,75,000 verified with direct C-level referral.",
+                ai_recommended_action="Schedule onsite equipment demonstration and present 12-month service warranty package.",
+                notes="Referred by Chief Engineer Shaji Thomas.",
+            ),
+            CrmLead(
+                lead_code="LED-2026-0002",
+                full_name="Ananya Roy",
+                company_name="GreenField Organic Resorts",
+                email="procurement@greenfieldresorts.com",
+                phone="+91 97455 22331",
+                source="WEBSITE",
+                status="PROPOSAL_SENT",
+                estimated_value=95000.0,
+                assigned_to_name="Alex Mercer (Admin)",
+                ai_score=78,
+                ai_qualification_summary="[Warm Prospect] Looking for standby power generation and rental solar mobile light towers for upcoming season.",
+                ai_recommended_action="Follow up on commercial proposal sent yesterday. Offer 5% early booking discount.",
+                notes="Inquired via web portal form.",
+            ),
+            CrmLead(
+                lead_code="LED-2026-0003",
+                full_name="Mohammed Salim",
+                company_name="Salim Civil Contractors",
+                email="salim.contractors@gmail.com",
+                phone="+91 94950 88776",
+                source="EXHIBITION",
+                status="NEW",
+                estimated_value=45000.0,
+                assigned_to_name="Alex Mercer (Admin)",
+                ai_score=64,
+                ai_qualification_summary="[Warm Prospect] Met at Kochi Infrastructure Expo. Needs periodic breaker and laser tool rentals.",
+                ai_recommended_action="Dispatch rental fleet brochure and register customer credit account.",
+            ),
+        ]
+        session.add_all(leads)
+
+    # 5. CRM Deals & Opportunities
+    existing_deals = (await session.execute(select(CrmDeal))).scalars().first()
+    if not existing_deals:
+        deals = [
+            CrmDeal(
+                deal_code="DL-2026-0001",
+                title="Metro Phase 3 Equipment Rental Contract",
+                customer_name="Southern Infra Projects Ltd",
+                amount=350000.0,
+                stage="NEGOTIATION",
+                probability=80,
+                expected_close_date=now + timedelta(days=14),
+                assigned_to_name="Alex Mercer (Admin)",
+                ai_win_probability=85,
+                ai_deal_risks="Competitor price undercut on monthly excavator leasing.",
+                ai_deal_recommendations="Highlight Littad's 2-hour on-site maintenance replacement guarantee to de-risk downtime.",
+                notes="Client highly satisfied with current generator rental.",
+            ),
+            CrmDeal(
+                deal_code="DL-2026-0002",
+                title="Industrial Genset Annual Maintenance (AMC)",
+                customer_name="Dr. Varghese Healthcare",
+                amount=120000.0,
+                stage="PROPOSAL",
+                probability=55,
+                expected_close_date=now + timedelta(days=21),
+                assigned_to_name="Alex Mercer (Admin)",
+                ai_win_probability=60,
+                ai_deal_risks="Hospital board budget review cycle in late November.",
+                ai_deal_recommendations="Emphasize 24/7 priority emergency dispatch and OEM spare parts availability.",
+            ),
+            CrmDeal(
+                deal_code="DL-2026-0003",
+                title="Warehouse Forklift Fleet Overhaul",
+                customer_name="Falcon Logistics Park",
+                amount=78000.0,
+                stage="CLOSED_WON",
+                probability=100,
+                expected_close_date=now - timedelta(days=2),
+                assigned_to_name="Alex Mercer (Admin)",
+                ai_win_probability=100,
+                ai_deal_risks="None (Closed Won).",
+                ai_deal_recommendations="Initiate maintenance kick-off and assign senior technician.",
+            ),
+        ]
+        session.add_all(deals)
+
+    # 6. CRM Customer 360
+    existing_cust = (await session.execute(select(CrmCustomer))).scalars().first()
+    if not existing_cust:
+        customers = [
+            CrmCustomer(
+                customer_code="CUST-2026-0001",
+                name="Southern Infra Projects Ltd",
+                company_name="Southern Infra Group",
+                email="billing@southerninfra.in",
+                phone="+91 94471 23456",
+                industry="Construction & Civil Works",
+                address="NH Bypass, Palarivattom, Kochi",
+                total_spend=525000.0,
+                status="ACTIVE",
+                customer_tier="PLATINUM",
+                notes="Primary partner for major government and infrastructure contracts in central Kerala.",
+            ),
+            CrmCustomer(
+                customer_code="CUST-2026-0002",
+                name="Falcon Logistics Park",
+                company_name="Falcon Freight & Supply Co",
+                email="support@falconlogistics.com",
+                phone="+91 97455 33445",
+                industry="Warehousing & Logistics",
+                address="Container Road, Kalamassery, Kochi",
+                total_spend=210000.0,
+                status="ACTIVE",
+                customer_tier="GOLD",
+                notes="Manages 150,000 sq ft bonded logistics hub.",
+            ),
+            CrmCustomer(
+                customer_code="CUST-2026-0003",
+                name="Dr. Varghese Healthcare",
+                company_name="Varghese Multi-Speciality Trust",
+                email="facilities@varghesehealth.org",
+                phone="+91 94950 55667",
+                industry="Healthcare & Hospitals",
+                address="M.G. Road, Ernakulam",
+                total_spend=145000.0,
+                status="ACTIVE",
+                customer_tier="SILVER",
+                notes="Critical power requirements; standby gensets under AMC.",
+            ),
+        ]
+        session.add_all(customers)
+
+    # 7. CRM Support Tickets
+    existing_tck = (await session.execute(select(CrmTicket))).scalars().first()
+    if not existing_tck:
+        tickets = [
+            CrmTicket(
+                ticket_number="TCK-2026-0001",
+                customer_name="Southern Infra Projects Ltd",
+                customer_email="site.mgr@southerninfra.in",
+                customer_phone="+91 94471 23456",
+                subject="Request fuel consumption calibration report for Cat 30kVA",
+                description="We need the certified fuel test chart for internal compliance before tomorrow's audit.",
+                priority="HIGH",
+                status="IN_PROGRESS",
+                assigned_agent_name="Alex Mercer (Admin)",
+                sla_due_date=now + timedelta(hours=6),
+                ai_sentiment="NEUTRAL",
+                ai_suggested_response="Dear Southern Infra Team, the calibration test report has been compiled and is attached for your audit records.",
+                resolution_notes="Document sent via email.",
+            ),
+            CrmTicket(
+                ticket_number="TCK-2026-0002",
+                customer_name="GreenField Organic Resorts",
+                customer_email="manager@greenfieldresorts.com",
+                customer_phone="+91 97455 22331",
+                subject="Invoice copy clarification for October service billing",
+                description="Tax invoice duplicate needed with updated GST number for accounting reconciliation.",
+                priority="MEDIUM",
+                status="OPEN",
+                assigned_agent_name="Alex Mercer (Admin)",
+                sla_due_date=now + timedelta(hours=24),
+                ai_sentiment="POSITIVE",
+                ai_suggested_response="Dear GreenField Resorts, we have updated your GSTIN and generated the revised tax invoice duplicate.",
+            ),
+        ]
+        session.add_all(tickets)
+
+    from app.services.sap_service import SapService
+    await SapService.ensure_sap_core_defaults(session)
+
+    await session.commit()
+    logger.info("SAP & CRM initial defaults verified/seeded successfully.")
+
+

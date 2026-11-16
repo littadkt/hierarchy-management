@@ -67,6 +67,42 @@ from app.schemas.warranty import (
     WarrantyStaffOut,
     WarrantyStaffUpdate,
 )
+from app.schemas.sap import (
+    ProductServiceTicketCreate,
+    ProductServiceTicketUpdate,
+    ProductServiceTicketOut,
+    RentalProductCreate,
+    RentalProductUpdate,
+    RentalProductOut,
+    RentalBookingCreate,
+    RentalBookingUpdate,
+    RentalBookingOut,
+    SapSalesOrderCreate,
+    SapSalesOrderUpdate,
+    SapSalesOrderOut,
+    SapDashboardStats,
+)
+from app.schemas.crm import (
+    CrmLeadCreate,
+    CrmLeadUpdate,
+    CrmLeadOut,
+    CrmDealCreate,
+    CrmDealUpdate,
+    CrmDealOut,
+    CrmCustomerCreate,
+    CrmCustomerUpdate,
+    CrmCustomerOut,
+    CrmTicketCreate,
+    CrmTicketUpdate,
+    CrmTicketOut,
+    CrmDashboardStats,
+    CrmAiLeadAnalyzeResponse,
+    CrmAiDealAnalyzeResponse,
+    CrmAiDraftRequest,
+    CrmAiDraftResponse,
+    CrmAiChatRequest,
+    CrmAiChatResponse,
+)
 
 __all__ = [
     "Token",

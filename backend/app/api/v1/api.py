@@ -20,6 +20,8 @@ from app.api.v1.endpoints import (
     permissions,
     schedules,
     notifications,
+    sap,
+    crm,
 )
 
 api_router = APIRouter()
@@ -60,4 +62,10 @@ api_router.include_router(
 )
 api_router.include_router(
     realtime.router, prefix="/realtime", tags=["Realtime Synchronization"]
+)
+api_router.include_router(
+    sap.router, prefix="/sap", tags=["SAP Business ERP Suite"]
+)
+api_router.include_router(
+    crm.router, prefix="/crm", tags=["CRM & Commercial AI Suite"]
 )
