@@ -6,8 +6,6 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
-  Clock,
-  MessageSquare,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
@@ -17,7 +15,6 @@ import {
   X,
   Filter,
   RotateCcw,
-  Sparkles,
   Users,
   MapPin,
   ExternalLink,
@@ -25,11 +22,12 @@ import {
   CheckSquare,
   LogIn,
   Check,
+  Building2,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
-import { approvalsApi, attendanceApi, usersApi, getErrorMessage } from "@/lib/api";
-import { Task, UserBrief, AttendanceRecord } from "@/lib/types";
+import { approvalsApi, attendanceApi, usersApi, branchesApi, getErrorMessage } from "@/lib/api";
+import { Task, UserBrief, AttendanceRecord, Branch } from "@/lib/types";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { RoleBadge } from "@/components/RoleBadge";
 import { TaskDetailModal } from "@/components/TaskDetailModal";
@@ -62,12 +60,14 @@ export default function ApprovalsPage() {
   const [sortBy, setSortBy] = useState<SortField>("date");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [searchQuery, setSearchQuery] = useState("");
+  const [branchFilter, setBranchFilter] = useState("");
   const [submittedByFilter, setSubmittedByFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [submittedDateFilter, setSubmittedDateFilter] = useState("");
   const [activeDatePreset, setActiveDatePreset] = useState<string>("");
   const [approverFilter, setApproverFilter] = useState("");
 
+  const [branches, setBranches] = useState<Branch[]>([]);
   const [usersList, setUsersList] = useState<UserBrief[]>([]);
 
   // Main Tab State: Tasks vs Check-ins
@@ -89,12 +89,18 @@ export default function ApprovalsPage() {
   const [selectedDetailId, setSelectedDetailId] = useState<string | null>(null);
 
   const loadApprovals = async (silent = false) => {
+    if (user?.role === "STAFF") {
+      setTasks([]);
+      setLoading(false);
+      return;
+    }
     if (!silent) setLoading(true);
     setError(null);
     try {
       const data = await approvalsApi.getPending({
         sort_by: sortBy,
         order: sortOrder,
+        branch: branchFilter || undefined,
         submitted_by_id: submittedByFilter || undefined,
         priority: priorityFilter || undefined,
         submitted_date: submittedDateFilter || undefined,
@@ -109,14 +115,22 @@ export default function ApprovalsPage() {
   };
 
   useEffect(() => {
-    if (user) {
+    if (user && user.role !== "STAFF") {
       loadApprovals();
     }
-  }, [user, sortBy, sortOrder, submittedByFilter, priorityFilter, submittedDateFilter, approverFilter]);
+  }, [user, sortBy, sortOrder, branchFilter, submittedByFilter, priorityFilter, submittedDateFilter, approverFilter]);
+
+  // Load active branches
+  useEffect(() => {
+    branchesApi
+      .list(true)
+      .then((data) => setBranches(data))
+      .catch((err) => console.error("Failed to load branches:", err));
+  }, []);
 
   // Load assignable / company users for filters
   useEffect(() => {
-    if (user) {
+    if (user && user.role !== "STAFF") {
       const fetchUsers =
         user.role === "SUPER_ADMIN" || user.role === "ADMIN"
           ? usersApi.list().then((list) => list as unknown as UserBrief[])
@@ -133,11 +147,23 @@ export default function ApprovalsPage() {
     }
   }, [user]);
 
+  // Check for tab query parameter in URL (?tab=checkins)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("tab") === "checkins") {
+        setActiveMainTab("CHECKINS");
+      }
+    }
+  }, []);
+
   const loadCheckins = async (silent = false) => {
-    if (user?.role !== "SUPER_ADMIN" && user?.role !== "ADMIN") return;
+    if (!user || user.role === "STAFF") return;
     if (!silent) setLoadingCheckins(true);
     try {
-      const data = await attendanceApi.getPendingApprovals();
+      const data = await attendanceApi.getPendingApprovals({
+        branch: branchFilter || undefined,
+      });
       setCheckinApprovals(data);
     } catch (err) {
       console.error("Failed to load checkin approvals:", err);
@@ -147,10 +173,16 @@ export default function ApprovalsPage() {
   };
 
   useEffect(() => {
-    if (user && (user.role === "SUPER_ADMIN" || user.role === "ADMIN")) {
+    if (user && user.role !== "STAFF") {
       loadCheckins();
     }
-  }, [user]);
+  }, [user, branchFilter]);
+
+  useEffect(() => {
+    if (activeMainTab === "CHECKINS" && user && user.role !== "STAFF") {
+      loadCheckins(true);
+    }
+  }, [activeMainTab, user]);
 
   useRealtimeEvent(
     [
@@ -213,45 +245,119 @@ export default function ApprovalsPage() {
     }
   };
 
-  // Submitter options (assignees / creators of pending approvals + usersList)
-  const submitterOptions = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; role?: string }>();
-    tasks.forEach((t) => {
-      if (t.assigned_to) {
-        map.set(t.assigned_to.id, {
-          id: t.assigned_to.id,
-          name: t.assigned_to.full_name,
-          role: t.assigned_to.role,
-        });
-      }
-      if (t.created_by) {
-        map.set(t.created_by.id, {
-          id: t.created_by.id,
-          name: t.created_by.full_name,
-          role: t.created_by.role,
-        });
-      }
+  // Available branches extracted from active branches, users, and tasks
+  const availableBranches = useMemo(() => {
+    const set = new Set<string>();
+    branches.forEach((b) => {
+      if (b.name) set.add(b.name.trim());
     });
     usersList.forEach((u) => {
-      if (!map.has(u.id)) {
-        map.set(u.id, { id: u.id, name: u.full_name, role: u.role });
+      if (u.branch) set.add(u.branch.trim());
+    });
+    tasks.forEach((t) => {
+      if (t.assigned_to?.branch) set.add(t.assigned_to.branch.trim());
+      if (t.created_by?.branch) set.add(t.created_by.branch.trim());
+      if (t.approver?.branch) set.add(t.approver.branch.trim());
+    });
+    checkinApprovals.forEach((rec) => {
+      if (rec.user?.branch) set.add(rec.user.branch.trim());
+    });
+    return Array.from(set).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }, [branches, usersList, tasks, checkinApprovals]);
+
+  // When branch filter changes, reset submitter/approver filters if they don't belong to the newly selected branch
+  const handleBranchChange = (newBranch: string) => {
+    setBranchFilter(newBranch);
+    if (newBranch) {
+      const bTarget = newBranch.trim().toLowerCase();
+      if (submittedByFilter) {
+        const u = usersList.find((x) => x.id === submittedByFilter);
+        if (u && (u.branch || "").trim().toLowerCase() !== bTarget) {
+          setSubmittedByFilter("");
+        }
+      }
+      if (approverFilter) {
+        const u = usersList.find((x) => x.id === approverFilter);
+        if (u && (u.branch || "").trim().toLowerCase() !== bTarget) {
+          setApproverFilter("");
+        }
+      }
+    }
+  };
+
+  // Submitter options (filtered by selected branch if branchFilter is set)
+  const submitterOptions = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; role?: string; branch?: string | null }>();
+    const bTarget = branchFilter.trim().toLowerCase();
+
+    const getBranch = (id: string, directBranch?: string | null) => {
+      if (directBranch) return directBranch;
+      const found = usersList.find((u) => u.id === id);
+      return found?.branch || null;
+    };
+
+    tasks.forEach((t) => {
+      if (t.assigned_to) {
+        const b = getBranch(t.assigned_to.id, t.assigned_to.branch);
+        if (!branchFilter || (b && b.trim().toLowerCase() === bTarget)) {
+          map.set(t.assigned_to.id, {
+            id: t.assigned_to.id,
+            name: t.assigned_to.full_name,
+            role: t.assigned_to.role,
+            branch: b,
+          });
+        }
+      }
+      if (t.created_by) {
+        const b = getBranch(t.created_by.id, t.created_by.branch);
+        if (!branchFilter || (b && b.trim().toLowerCase() === bTarget)) {
+          map.set(t.created_by.id, {
+            id: t.created_by.id,
+            name: t.created_by.full_name,
+            role: t.created_by.role,
+            branch: b,
+          });
+        }
       }
     });
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [tasks, usersList]);
 
-  // Approver options (designated approvers of pending approvals + eligible users)
+    usersList.forEach((u) => {
+      const b = u.branch || null;
+      if (!branchFilter || (b && b.trim().toLowerCase() === bTarget)) {
+        if (!map.has(u.id)) {
+          map.set(u.id, { id: u.id, name: u.full_name, role: u.role, branch: b });
+        }
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [tasks, usersList, branchFilter]);
+
+  // Approver options (filtered by selected branch if branchFilter is set)
   const approverOptions = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; role?: string }>();
+    const map = new Map<string, { id: string; name: string; role?: string; branch?: string | null }>();
+    const bTarget = branchFilter.trim().toLowerCase();
+
+    const getBranch = (id: string, directBranch?: string | null) => {
+      if (directBranch) return directBranch;
+      const found = usersList.find((u) => u.id === id);
+      return found?.branch || null;
+    };
+
     tasks.forEach((t) => {
       if (t.approver) {
-        map.set(t.approver.id, {
-          id: t.approver.id,
-          name: t.approver.full_name,
-          role: t.approver.role,
-        });
+        const b = getBranch(t.approver.id, t.approver.branch);
+        if (!branchFilter || (b && b.trim().toLowerCase() === bTarget)) {
+          map.set(t.approver.id, {
+            id: t.approver.id,
+            name: t.approver.full_name,
+            role: t.approver.role,
+            branch: b,
+          });
+        }
       }
     });
+
     usersList.forEach((u) => {
       if (
         u.role === "SUPER_ADMIN" ||
@@ -259,15 +365,20 @@ export default function ApprovalsPage() {
         u.role === "IN_CHARGE" ||
         u.role === "TEAM_LEADER"
       ) {
-        if (!map.has(u.id)) {
-          map.set(u.id, { id: u.id, name: u.full_name, role: u.role });
+        const b = u.branch || null;
+        if (!branchFilter || (b && b.trim().toLowerCase() === bTarget)) {
+          if (!map.has(u.id)) {
+            map.set(u.id, { id: u.id, name: u.full_name, role: u.role, branch: b });
+          }
         }
       }
     });
+
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [tasks, usersList]);
+  }, [tasks, usersList, branchFilter]);
 
   const hasActiveFilters = Boolean(
+    branchFilter ||
     searchQuery ||
     submittedByFilter ||
     priorityFilter ||
@@ -276,6 +387,7 @@ export default function ApprovalsPage() {
   );
 
   const resetAllFilters = () => {
+    setBranchFilter("");
     setSearchQuery("");
     setSubmittedByFilter("");
     setPriorityFilter("");
@@ -284,9 +396,38 @@ export default function ApprovalsPage() {
     setApproverFilter("");
   };
 
-  // Instant client-side filtering and sorting
+  // Instant client-side filtering and sorting for tasks
   const filteredAndSortedTasks = useMemo(() => {
     let list = [...tasks];
+
+    // Filter by Branch
+    if (branchFilter) {
+      const bTarget = branchFilter.trim().toLowerCase();
+      list = list.filter((t) => {
+        const assignBranch = (t.assigned_to?.branch || "").trim().toLowerCase();
+        const createBranch = (t.created_by?.branch || "").trim().toLowerCase();
+        const approverBranch = (t.approver?.branch || "").trim().toLowerCase();
+
+        let userAssigneeBranch = "";
+        let userCreatorBranch = "";
+        if (!assignBranch && t.assigned_to_id) {
+          const u = usersList.find((x) => x.id === t.assigned_to_id);
+          userAssigneeBranch = (u?.branch || "").trim().toLowerCase();
+        }
+        if (!createBranch && t.created_by_id) {
+          const u = usersList.find((x) => x.id === t.created_by_id);
+          userCreatorBranch = (u?.branch || "").trim().toLowerCase();
+        }
+
+        return (
+          assignBranch === bTarget ||
+          createBranch === bTarget ||
+          approverBranch === bTarget ||
+          userAssigneeBranch === bTarget ||
+          userCreatorBranch === bTarget
+        );
+      });
+    }
 
     // Search query
     if (searchQuery.trim()) {
@@ -370,7 +511,20 @@ export default function ApprovalsPage() {
     });
 
     return list;
-  }, [tasks, sortBy, sortOrder, searchQuery, submittedByFilter, priorityFilter, submittedDateFilter, approverFilter]);
+  }, [tasks, usersList, branchFilter, sortBy, sortOrder, searchQuery, submittedByFilter, priorityFilter, submittedDateFilter, approverFilter]);
+
+  // Filter check-in approvals by branch
+  const filteredCheckins = useMemo(() => {
+    let list = [...checkinApprovals];
+    if (branchFilter) {
+      const bTarget = branchFilter.trim().toLowerCase();
+      list = list.filter((rec) => {
+        const recBranch = (rec.user?.branch || "").trim().toLowerCase();
+        return recBranch === bTarget;
+      });
+    }
+    return list;
+  }, [checkinApprovals, branchFilter]);
 
   return (
     <ProtectedRoute>
@@ -405,11 +559,11 @@ export default function ApprovalsPage() {
                   : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300"
               }`}
             >
-              {tasks.length}
+              {filteredAndSortedTasks.length}
             </span>
           </button>
 
-          {(user?.role === "SUPER_ADMIN" || user?.role === "ADMIN") && (
+          {user?.role !== "STAFF" && (
             <button
               type="button"
               onClick={() => setActiveMainTab("CHECKINS")}
@@ -421,9 +575,9 @@ export default function ApprovalsPage() {
             >
               <LogIn className="w-4 h-4" />
               <span>Check-in Approvals</span>
-              {checkinApprovals.length > 0 ? (
+              {filteredCheckins.length > 0 ? (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse">
-                  {checkinApprovals.length} pending
+                  {filteredCheckins.length} pending
                 </span>
               ) : (
                 <span
@@ -467,7 +621,7 @@ export default function ApprovalsPage() {
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Filter by submitter, priority, submission date, or designated approver
+                    Filter by branch, submitter, priority, submission date, or designated approver
                   </p>
                 </div>
               </div>
@@ -485,8 +639,34 @@ export default function ApprovalsPage() {
             </div>
 
             {/* Filter Controls Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
-              {/* 1. Submitted By Filter */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+              {/* 1. Branch Filter */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1 flex items-center gap-1">
+                  <Building2 className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Branch</span>
+                </label>
+                <select
+                  value={branchFilter}
+                  onChange={(e) => handleBranchChange(e.target.value)}
+                  className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs cursor-pointer"
+                >
+                  <option value="" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">
+                    All Branches
+                  </option>
+                  {availableBranches.map((b) => (
+                    <option
+                      key={b}
+                      value={b}
+                      className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                    >
+                      {b}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 2. Submitted By Filter */}
               <div>
                 <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1 flex items-center gap-1">
                   <UserCheck className="w-3.5 h-3.5 text-indigo-500" />
@@ -498,7 +678,7 @@ export default function ApprovalsPage() {
                   className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs cursor-pointer"
                 >
                   <option value="" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">
-                    All Submitters
+                    {branchFilter ? `All Submitters in ${branchFilter}` : "All Submitters"}
                   </option>
                   {submitterOptions.map((s) => (
                     <option
@@ -506,13 +686,13 @@ export default function ApprovalsPage() {
                       value={s.id}
                       className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
                     >
-                      {s.name} {s.role ? `(${s.role.replace("_", " ")})` : ""}
+                      {s.name} {s.role ? `(${s.role.replace("_", " ")})` : ""} {s.branch ? `[${s.branch}]` : ""}
                     </option>
                   ))}
                 </select>
               </div>
 
-              {/* 2. Priority Filter */}
+              {/* 3. Priority Filter */}
               <div>
                 <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1 flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
@@ -541,7 +721,7 @@ export default function ApprovalsPage() {
                 </select>
               </div>
 
-              {/* 3. Submitted Date Filter */}
+              {/* 4. Submitted Date Filter */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 flex items-center gap-1">
@@ -572,7 +752,7 @@ export default function ApprovalsPage() {
                 />
               </div>
 
-              {/* 4. Designated Approver Filter */}
+              {/* 5. Designated Approver Filter */}
               <div>
                 <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1 flex items-center gap-1">
                   <ShieldAlert className="w-3.5 h-3.5 text-purple-500" />
@@ -584,7 +764,7 @@ export default function ApprovalsPage() {
                   className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs cursor-pointer"
                 >
                   <option value="" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">
-                    All Approvers
+                    {branchFilter ? `All Approvers in ${branchFilter}` : "All Approvers"}
                   </option>
                   {approverOptions.map((a) => (
                     <option
@@ -592,13 +772,13 @@ export default function ApprovalsPage() {
                       value={a.id}
                       className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
                     >
-                      {a.name} {a.role ? `(${a.role.replace("_", " ")})` : ""}
+                      {a.name} {a.role ? `(${a.role.replace("_", " ")})` : ""} {a.branch ? `[${a.branch}]` : ""}
                     </option>
                   ))}
                 </select>
               </div>
 
-              {/* 5. Search Bar */}
+              {/* 6. Search Bar */}
               <div>
                 <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1 flex items-center gap-1">
                   <Search className="w-3.5 h-3.5 text-slate-400" />
@@ -797,6 +977,11 @@ export default function ApprovalsPage() {
                             {t.assigned_to?.full_name || "Unassigned"}
                           </span>
                           {t.assigned_to?.role && <RoleBadge role={t.assigned_to.role} />}
+                          {t.assigned_to?.branch && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 font-medium">
+                              {t.assigned_to.branch}
+                            </span>
+                          )}
                         </div>
                       </td>
 
@@ -912,7 +1097,7 @@ export default function ApprovalsPage() {
                       Off-Network Check-In Requests
                     </h2>
                     <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                      {checkinApprovals.length} pending
+                      {filteredCheckins.length} of {checkinApprovals.length} pending
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -921,15 +1106,42 @@ export default function ApprovalsPage() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => loadCheckins()}
-                disabled={loadingCheckins}
-                className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition cursor-pointer"
-              >
-                <RotateCcw className={`w-3.5 h-3.5 ${loadingCheckins ? "animate-spin" : ""}`} />
-                <span>Refresh</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 flex items-center gap-1">
+                    <Building2 className="w-3.5 h-3.5 text-blue-500" />
+                    <span>Branch:</span>
+                  </span>
+                  <select
+                    value={branchFilter}
+                    onChange={(e) => handleBranchChange(e.target.value)}
+                    className="text-xs font-medium px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs cursor-pointer"
+                  >
+                    <option value="" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">
+                      All Branches
+                    </option>
+                    {availableBranches.map((b) => (
+                      <option
+                        key={b}
+                        value={b}
+                        className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                      >
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => loadCheckins()}
+                  disabled={loadingCheckins}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition cursor-pointer"
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${loadingCheckins ? "animate-spin" : ""}`} />
+                  <span>Refresh</span>
+                </button>
+              </div>
             </div>
 
             {/* Check-ins Table */}
@@ -953,20 +1165,30 @@ export default function ApprovalsPage() {
                         Loading pending check-in requests...
                       </td>
                     </tr>
-                  ) : checkinApprovals.length === 0 ? (
+                  ) : filteredCheckins.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="py-12 text-center text-slate-400">
                         <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
                         <p className="font-semibold text-slate-700 dark:text-slate-300">
-                          All caught up!
+                          {branchFilter ? `No pending requests for branch "${branchFilter}"` : "All caught up!"}
                         </p>
                         <p className="text-[11px] text-slate-400 mt-1">
-                          No pending check-in requests. All employees are checking in from authorized Wi-Fi networks.
+                          {branchFilter ? (
+                            <button
+                              type="button"
+                              onClick={() => setBranchFilter("")}
+                              className="text-indigo-600 dark:text-indigo-400 underline font-semibold"
+                            >
+                              Show all branches
+                            </button>
+                          ) : (
+                            "No pending check-in requests. All employees are checking in from authorized Wi-Fi networks."
+                          )}
                         </p>
                       </td>
                     </tr>
                   ) : (
-                    checkinApprovals.map((item) => (
+                    filteredCheckins.map((item) => (
                       <tr
                         key={item.id}
                         className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"

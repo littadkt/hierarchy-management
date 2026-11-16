@@ -68,6 +68,9 @@ export const ProtectedRoute: React.FC<{
     if (featureInfo?.key === "accessible_windows") {
       return user.role === "ADMIN";
     }
+    if (featureInfo?.key === "approvals") {
+      return user.role !== "STAFF";
+    }
     if (!featureInfo) return true;
     return hasPermission(featureInfo.key, "display");
   })();

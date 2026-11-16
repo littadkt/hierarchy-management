@@ -189,12 +189,19 @@ class AttendanceService:
 
         # Check office Wi-Fi / network restriction (Branch level or global fallback from .env)
         branch = None
+        branch_has_network_rules = False
         if user.branch:
             b_stmt = select(Branch).where(func.lower(Branch.name) == user.branch.strip().lower())
             branch = (await session.execute(b_stmt)).scalar_one_or_none()
+            if branch and (branch.allowed_wifi_ips or branch.wifi_ssid):
+                branch_has_network_rules = True
 
-        effective_allowed_ips = (branch.allowed_wifi_ips if branch and branch.allowed_wifi_ips else None) or settings.ALLOWED_WIFI_IPS
-        effective_ssid = (branch.wifi_ssid if branch and branch.wifi_ssid else None) or settings.ALLOWED_WIFI_SSID
+        if branch_has_network_rules:
+            effective_allowed_ips = branch.allowed_wifi_ips if branch and branch.allowed_wifi_ips else None
+            effective_ssid = branch.wifi_ssid if branch and branch.wifi_ssid else None
+        else:
+            effective_allowed_ips = settings.ALLOWED_WIFI_IPS
+            effective_ssid = settings.ALLOWED_WIFI_SSID
 
         requires_approval = False
         approval_status = "APPROVED"
@@ -226,7 +233,17 @@ class AttendanceService:
                 )
             # Re-opening / Resuming attendance session
             record.check_out_time = None
-            if note:
+            if requires_approval:
+                record.requires_approval = True
+                record.approval_status = "PENDING"
+                gps_desc = f"GPS: ({latitude:.5f}, {longitude:.5f})" if latitude and longitude else "GPS unavailable"
+                resumed_note = f"Resumed off-network check-in (IP: {ip_address or 'Unknown'}, {gps_desc}). Awaiting Admin Approval."
+                record.check_in_note = (
+                    f"{record.check_in_note} | {resumed_note}"
+                    if record.check_in_note
+                    else resumed_note
+                )
+            elif note:
                 record.check_in_note = (
                     f"{record.check_in_note} | Resumed: {note.strip()}"
                     if record.check_in_note
@@ -358,51 +375,60 @@ class AttendanceService:
             await session.commit()
             await session.refresh(record)
 
-            # If approval required, dispatch notifications to Super Admins and Admins
-            if record.requires_approval and record.approval_status == "PENDING":
-                try:
-                    from app.services.notification_service import NotificationService
-                    admin_stmt = select(User).where(
-                        or_(
-                            User.role == Role.SUPER_ADMIN,
-                            and_(User.role == Role.ADMIN, or_(User.branch == user.branch, User.branch.is_(None))),
-                        ),
-                        User.is_active == True,
-                        User.id != user.id,
+        # If approval required, dispatch notifications to Super Admins and Admins (both initial and resumed check-ins)
+        if record.requires_approval and record.approval_status == "PENDING":
+            try:
+                from app.services.notification_service import NotificationService
+                user_branch_clean = user.branch.strip().lower() if user.branch and user.branch.strip() else None
+                if user_branch_clean:
+                    branch_condition = or_(
+                        func.lower(func.trim(User.branch)) == user_branch_clean,
+                        User.branch.is_(None),
                     )
-                    admins = (await session.execute(admin_stmt)).scalars().all()
-                    gps_info = f"GPS: Lat {latitude:.5f}, Lng {longitude:.5f}" if latitude and longitude else "GPS not provided"
-                    notif_title = "Check-in Approval Requested"
-                    notif_msg = f"{user.full_name} ({user.branch or 'General'}) checked in outside office Wi-Fi (IP: {ip_address or 'Unknown'}). {gps_info}. Approval required."
+                else:
+                    branch_condition = True
 
-                    for adm in admins:
-                        try:
-                            await NotificationService.create(
-                                session=session,
-                                user_id=adm.id,
-                                title=notif_title,
-                                message=notif_msg,
-                                notification_type="CHECKIN_APPROVAL_REQUEST",
-                                link="/approvals",
-                            )
-                        except Exception as ex:
-                            logger.error(f"Failed to deliver check-in notification to admin {adm.id}: {ex}")
+                admin_stmt = select(User).where(
+                    or_(
+                        User.role == Role.SUPER_ADMIN,
+                        and_(User.role == Role.ADMIN, branch_condition),
+                    ),
+                    User.is_active == True,
+                    User.id != user.id,
+                )
+                admins = (await session.execute(admin_stmt)).scalars().all()
+                gps_info = f"GPS: Lat {latitude:.5f}, Lng {longitude:.5f}" if latitude and longitude else "GPS not provided"
+                notif_title = "Check-in Approval Requested"
+                notif_msg = f"{user.full_name} ({user.branch or 'General'}) checked in outside office Wi-Fi (IP: {ip_address or 'Unknown'}). {gps_info}. Approval required."
 
-                    await broadcaster.broadcast(
-                        "CHECKIN_APPROVAL_REQUESTED",
-                        {
-                            "attendance_id": str(record.id),
-                            "user_id": str(user.id),
-                            "user_name": user.full_name,
-                            "date": record.date,
-                            "latitude": latitude,
-                            "longitude": longitude,
-                            "ip_address": ip_address,
-                            "branch": user.branch,
-                        },
-                    )
-                except Exception as ex:
-                    logger.error(f"Failed to broadcast check-in approval request: {ex}")
+                for adm in admins:
+                    try:
+                        await NotificationService.create(
+                            session=session,
+                            user_id=adm.id,
+                            title=notif_title,
+                            message=notif_msg,
+                            notification_type="CHECKIN_APPROVAL_REQUEST",
+                            link="/approvals?tab=checkins",
+                        )
+                    except Exception as ex:
+                        logger.error(f"Failed to deliver check-in notification to admin {adm.id}: {ex}")
+
+                await broadcaster.broadcast(
+                    "CHECKIN_APPROVAL_REQUESTED",
+                    {
+                        "attendance_id": str(record.id),
+                        "user_id": str(user.id),
+                        "user_name": user.full_name,
+                        "date": record.date,
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "ip_address": ip_address,
+                        "branch": user.branch,
+                    },
+                )
+            except Exception as ex:
+                logger.error(f"Failed to broadcast check-in approval request: {ex}")
 
         # Broadcast real-time event
         await broadcaster.broadcast(
@@ -730,16 +756,21 @@ class AttendanceService:
     async def list_pending_checkin_approvals(
         session: AsyncSession,
         current_user: User,
+        branch: Optional[str] = None,
     ) -> List[Attendance]:
         """
-        List attendance records requiring admin review (off-network check-ins).
-        Super Admin sees all, Admin sees records for employees in their branch.
+        List attendance records requiring supervisor review (off-network check-ins).
+        Super Admin sees all, Admin sees records for employees in their branch,
+        In-Charge sees records for their branch/department, Team Leader sees records for their department/subordinates.
+        Level 5 Staff users cannot review check-ins.
         """
-        if current_user.role not in [Role.SUPER_ADMIN, Role.ADMIN]:
+        if current_user.role == Role.STAFF:
             return []
 
+        user_alias = aliased(User)
         stmt = (
             select(Attendance)
+            .join(user_alias, Attendance.user_id == user_alias.id)
             .options(selectinload(Attendance.user), selectinload(Attendance.approved_by))
             .where(
                 Attendance.requires_approval == True,
@@ -748,10 +779,35 @@ class AttendanceService:
             .order_by(desc(Attendance.check_in_time))
         )
 
-        if current_user.role != Role.SUPER_ADMIN and current_user.branch:
-            stmt = stmt.join(User, Attendance.user_id == User.id).where(
-                User.branch == current_user.branch
-            )
+        if current_user.role != Role.SUPER_ADMIN:
+            if current_user.role == Role.ADMIN:
+                if current_user.branch and current_user.branch.strip():
+                    admin_branch_clean = current_user.branch.strip().lower()
+                    stmt = stmt.where(
+                        or_(
+                            func.lower(func.trim(user_alias.branch)) == admin_branch_clean,
+                            user_alias.branch.is_(None),
+                        )
+                    )
+            elif current_user.role == Role.IN_CHARGE:
+                conds = []
+                if current_user.branch and current_user.branch.strip():
+                    conds.append(func.lower(func.trim(user_alias.branch)) == current_user.branch.strip().lower())
+                if current_user.department and current_user.department.strip():
+                    conds.append(func.lower(func.trim(user_alias.department)) == current_user.department.strip().lower())
+                conds.append(user_alias.reports_to_id == current_user.id)
+                if conds:
+                    stmt = stmt.where(or_(*conds))
+            elif current_user.role == Role.TEAM_LEADER:
+                conds = [user_alias.reports_to_id == current_user.id]
+                if current_user.department and current_user.department.strip():
+                    conds.append(func.lower(func.trim(user_alias.department)) == current_user.department.strip().lower())
+                stmt = stmt.where(or_(*conds))
+
+        # Explicit branch filter if provided
+        if branch and branch.strip() and branch.strip().upper() != "ALL":
+            b_clean = branch.strip().lower()
+            stmt = stmt.where(func.lower(func.trim(user_alias.branch)) == b_clean)
 
         res = await session.execute(stmt)
         return list(res.scalars().all())
@@ -763,10 +819,10 @@ class AttendanceService:
         admin_user: User,
     ) -> Attendance:
         """Approve an off-network check-in request"""
-        if admin_user.role not in [Role.SUPER_ADMIN, Role.ADMIN]:
+        if admin_user.role == Role.STAFF:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only Admins and Super Admins can approve check-in requests.",
+                detail="Staff users cannot approve check-in requests.",
             )
 
         stmt = (
@@ -826,10 +882,10 @@ class AttendanceService:
         reason: Optional[str] = None,
     ) -> Attendance:
         """Reject an off-network check-in request"""
-        if admin_user.role not in [Role.SUPER_ADMIN, Role.ADMIN]:
+        if admin_user.role == Role.STAFF:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only Admins and Super Admins can reject check-in requests.",
+                detail="Staff users cannot reject check-in requests.",
             )
 
         stmt = (

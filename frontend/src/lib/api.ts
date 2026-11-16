@@ -522,6 +522,7 @@ export const approvalsApi = {
     approver_id?: string;
     priority?: string;
     submitted_date?: string;
+    branch?: string;
   }): Promise<Task[]> => {
     const response = await api.get("/approvals/pending", { params });
     return response.data;
@@ -1059,8 +1060,8 @@ export const attendanceApi = {
     const response = await api.post("/attendance/check-in", body);
     return response.data;
   },
-  getPendingApprovals: async (): Promise<AttendanceRecord[]> => {
-    const response = await api.get("/attendance/pending-approvals");
+  getPendingApprovals: async (params?: { branch?: string }): Promise<AttendanceRecord[]> => {
+    const response = await api.get("/attendance/pending-approvals", { params });
     return response.data;
   },
   approveCheckIn: async (id: string): Promise<AttendanceRecord> => {

@@ -488,8 +488,11 @@ export default function UsersPage() {
                                 title={`Scheduled Shift: ${u.schedule_name || "Custom"} (${u.check_in_time} - ${u.check_out_time || ""})`}
                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800"
                               >
-                                <Clock className="w-2.5 h-2.5 text-indigo-500" />
-                                <span>{u.check_in_time} - {u.check_out_time || ""}</span>
+                                <Clock className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
+                                <span>
+                                  {u.schedule_name ? `${u.schedule_name.split(" (")[0]}: ` : ""}
+                                  {u.check_in_time} - {u.check_out_time || ""}
+                                </span>
                               </span>
                             )}
                             {!u.branch && !u.department && !u.check_in_time && u.role !== "SUPER_ADMIN" && (

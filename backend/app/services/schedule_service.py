@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 import uuid
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schedule import TimeSchedule
@@ -27,9 +27,21 @@ class ScheduleService:
 
         schedules_out = []
         for sched, count in results:
-            out = TimeScheduleOut.model_validate(sched)
-            out.employee_count = count
-            schedules_out.append(out)
+            schedules_out.append(
+                TimeScheduleOut(
+                    id=sched.id,
+                    name=sched.name,
+                    check_in_time=sched.check_in_time,
+                    check_out_time=sched.check_out_time,
+                    buffer_minutes=sched.buffer_minutes,
+                    monthly_buffer_limit=sched.monthly_buffer_limit,
+                    description=sched.description,
+                    is_active=sched.is_active,
+                    created_at=sched.created_at,
+                    updated_at=sched.updated_at,
+                    employee_count=count,
+                )
+            )
         return schedules_out
 
     @staticmethod
@@ -59,11 +71,20 @@ class ScheduleService:
         )
         session.add(schedule)
         await session.commit()
-        await session.refresh(schedule)
 
-        out = TimeScheduleOut.model_validate(schedule)
-        out.employee_count = 0
-        return out
+        return TimeScheduleOut(
+            id=schedule.id,
+            name=schedule.name,
+            check_in_time=schedule.check_in_time,
+            check_out_time=schedule.check_out_time,
+            buffer_minutes=schedule.buffer_minutes,
+            monthly_buffer_limit=schedule.monthly_buffer_limit,
+            description=schedule.description,
+            is_active=schedule.is_active,
+            created_at=schedule.created_at,
+            updated_at=schedule.updated_at,
+            employee_count=0,
+        )
 
     @staticmethod
     async def update_schedule(
@@ -104,15 +125,24 @@ class ScheduleService:
 
         schedule.updated_at = datetime.now(timezone.utc)
         await session.commit()
-        await session.refresh(schedule)
 
         # Count users
         count_stmt = select(func.count(User.id)).where(User.schedule_id == schedule_id)
         count = (await session.execute(count_stmt)).scalar_one() or 0
 
-        out = TimeScheduleOut.model_validate(schedule)
-        out.employee_count = count
-        return out
+        return TimeScheduleOut(
+            id=schedule.id,
+            name=schedule.name,
+            check_in_time=schedule.check_in_time,
+            check_out_time=schedule.check_out_time,
+            buffer_minutes=schedule.buffer_minutes,
+            monthly_buffer_limit=schedule.monthly_buffer_limit,
+            description=schedule.description,
+            is_active=schedule.is_active,
+            created_at=schedule.created_at,
+            updated_at=schedule.updated_at,
+            employee_count=count,
+        )
 
     @staticmethod
     async def delete_schedule(session: AsyncSession, schedule_id: uuid.UUID) -> None:
@@ -123,9 +153,9 @@ class ScheduleService:
                 detail="Time schedule not found.",
             )
 
-        # Unlink users
+        # Unlink users safely
         await session.execute(
-            select(User).where(User.schedule_id == schedule_id)
+            update(User).where(User.schedule_id == schedule_id).values(schedule_id=None)
         )
         # Delete schedule (users.schedule_id has ondelete="SET NULL")
         await session.delete(schedule)

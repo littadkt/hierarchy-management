@@ -44,11 +44,20 @@ async def get_dashboard_stats(
     my_tasks_count = (await session.execute(my_tasks_stmt)).scalar() or 0
 
     # 4. My pending approvals count
-    my_approvals_stmt = select(func.count(Task.id)).where(
-        Task.status == TaskStatus.PENDING_APPROVAL,
-        Task.approver_id == current_user.id,
-    )
-    my_pending_approvals = (await session.execute(my_approvals_stmt)).scalar() or 0
+    if current_user.role == Role.SUPER_ADMIN:
+        my_approvals_stmt = select(func.count(Task.id)).where(
+            Task.status == TaskStatus.PENDING_APPROVAL,
+            Task.requires_approval == True,
+        )
+        my_pending_approvals = (await session.execute(my_approvals_stmt)).scalar() or 0
+    elif current_user.role == Role.STAFF:
+        my_pending_approvals = 0
+    else:
+        my_approvals_stmt = select(func.count(Task.id)).where(
+            Task.status == TaskStatus.PENDING_APPROVAL,
+            Task.approver_id == current_user.id,
+        )
+        my_pending_approvals = (await session.execute(my_approvals_stmt)).scalar() or 0
 
     # 5. Recurring tasks count
     rec_stmt = select(func.count(Task.id)).where(Task.is_recurring == True)

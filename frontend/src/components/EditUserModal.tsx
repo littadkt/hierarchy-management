@@ -55,58 +55,71 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
 
   const isSuperAdmin = currentUser?.role === "SUPER_ADMIN";
   const canManageOrganizational = isSuperAdmin || currentUser?.role === "ADMIN";
+  const canManageSchedule = isSuperAdmin || currentUser?.role === "ADMIN" || currentUser?.role === "IN_CHARGE";
 
   useEffect(() => {
-    if (isOpen) {
-      branchesApi.list(true).then(setBranches).catch(() => {});
-      departmentsApi.list(true).then(setDepartments).catch(() => {});
-      schedulesApi
-        .list()
-        .then((data) => {
-          setSchedules(data);
-          if (user) {
-            let schedId = user.schedule_id || "";
-            if (!schedId && user.check_in_time) {
-              const matched = data.find((s) => s.check_in_time === user.check_in_time);
-              if (matched) schedId = matched.id;
-            }
-            if (!schedId && data.length > 0) {
-              const defaultSched = data.find((s) => s.name.toLowerCase().includes("general")) || data[0];
-              schedId = defaultSched.id;
-            }
-            if (schedId) {
-              setSelectedScheduleId(schedId);
-              const found = data.find((s) => s.id === schedId);
-              if (found) {
-                setCheckInTime(found.check_in_time);
-                setCheckOutTime(found.check_out_time);
-              }
-            }
+    if (!isOpen || !user) return;
+
+    setFullName(user.full_name);
+    setEmail(user.email);
+    setPassword("");
+    setRole(user.role);
+    setBranch(user.branch || "");
+    setDepartment(user.department || "");
+    setSelectedScheduleId(user.schedule_id || "");
+    setCheckInTime(user.check_in_time || "");
+    setCheckOutTime(user.check_out_time || "");
+    setIsActive(user.is_active);
+    setCanPlaceOrders(!!user.can_place_wholesale_orders);
+    setError(null);
+
+    setShowQuickAddBranch(false);
+    setNewBranchName("");
+    setShowQuickAddDept(false);
+    setNewDeptName("");
+    setShowQuickAddSchedule(false);
+    setNewScheduleName("");
+
+    let isCancelled = false;
+
+    branchesApi.list(true).then((data) => {
+      if (!isCancelled) setBranches(data);
+    }).catch(() => {});
+
+    departmentsApi.list(true).then((data) => {
+      if (!isCancelled) setDepartments(data);
+    }).catch(() => {});
+
+    schedulesApi
+      .list()
+      .then((data) => {
+        if (isCancelled) return;
+        setSchedules(data);
+        let schedId = user.schedule_id || "";
+        if (!schedId && user.check_in_time) {
+          const matched = data.find((s) => s.check_in_time === user.check_in_time);
+          if (matched) schedId = matched.id;
+        }
+        if (!schedId && data.length > 0) {
+          const defaultSched = data.find((s) => s.name.toLowerCase().includes("general")) || data[0];
+          schedId = defaultSched.id;
+        }
+        if (schedId) {
+          setSelectedScheduleId((prev) => (prev && prev !== "" ? prev : schedId));
+          const targetId = user.schedule_id || schedId;
+          const found = data.find((s) => s.id === targetId);
+          if (found) {
+            setCheckInTime((prev) => (prev && prev !== "" ? prev : found.check_in_time));
+            setCheckOutTime((prev) => (prev && prev !== "" ? prev : found.check_out_time));
           }
-        })
-        .catch(() => {});
-      setShowQuickAddBranch(false);
-      setNewBranchName("");
-      setShowQuickAddDept(false);
-      setNewDeptName("");
-      setShowQuickAddSchedule(false);
-      setNewScheduleName("");
-    }
-    if (user) {
-      setFullName(user.full_name);
-      setEmail(user.email);
-      setPassword("");
-      setRole(user.role);
-      setBranch(user.branch || "");
-      setDepartment(user.department || "");
-      setSelectedScheduleId(user.schedule_id || "");
-      setCheckInTime(user.check_in_time || "");
-      setCheckOutTime(user.check_out_time || "");
-      setIsActive(user.is_active);
-      setCanPlaceOrders(!!user.can_place_wholesale_orders);
-      setError(null);
-    }
-  }, [user, isOpen]);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isOpen, user?.id]);
 
   const handleScheduleSelect = (schedId: string) => {
     setSelectedScheduleId(schedId);
@@ -325,7 +338,7 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
         payload.password = password.trim();
       }
 
-      if (canManageOrganizational) {
+      if (canManageSchedule) {
         if (!selectedScheduleId) {
           setError("Please select a check-in and check-out schedule.");
           setLoading(false);
@@ -513,21 +526,23 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
           )}
 
           {/* Check-in & Check-out Schedule Select */}
-          {canManageOrganizational && (
+          {canManageSchedule && (
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-indigo-500" />
                   <span>Check-in & Check-out Schedule *</span>
                 </label>
-                <button
-                  type="button"
-                  onClick={() => setShowQuickAddSchedule(!showQuickAddSchedule)}
-                  className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>{showQuickAddSchedule ? "Select Existing" : "+ New Schedule"}</span>
-                </button>
+                {canManageOrganizational && (
+                  <button
+                    type="button"
+                    onClick={() => setShowQuickAddSchedule(!showQuickAddSchedule)}
+                    className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{showQuickAddSchedule ? "Select Existing" : "+ New Schedule"}</span>
+                  </button>
+                )}
               </div>
 
               {showQuickAddSchedule ? (

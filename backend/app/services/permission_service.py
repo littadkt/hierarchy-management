@@ -84,10 +84,8 @@ def get_default_permissions_for_role(role: Role) -> Dict[str, Dict[str, bool]]:
             wid = w["id"]
             if wid in ["backup", "branches", "departments", "wholesale"]:
                 result[wid] = dict(all_false)
-            elif wid in ["tasks", "subtasks", "checklist", "warranty", "warranty_jobs", "attendance"]:
+            elif wid in ["tasks", "subtasks", "checklist", "approvals", "warranty", "warranty_jobs", "attendance"]:
                 result[wid] = {"add": True, "display": True, "edit": True, "delete": False}
-            elif wid in ["approvals"]:
-                result[wid] = {"add": True, "display": True, "edit": False, "delete": False}
             elif wid in ["inventory", "purchases", "dashboard", "users", "hierarchy", "operations", "inventory_services", "hr_org", "admin_system"]:
                 result[wid] = {"add": False, "display": True, "edit": False, "delete": False}
             else:

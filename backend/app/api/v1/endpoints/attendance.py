@@ -82,11 +82,12 @@ async def check_in(
 
 @router.get("/pending-approvals", response_model=List[AttendanceOut])
 async def get_pending_checkin_approvals(
+    branch: Optional[str] = Query(None, description="Filter check-in approvals by branch"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
-    """List all check-ins awaiting admin approval (off-network check-ins)"""
-    return await AttendanceService.list_pending_checkin_approvals(session, current_user)
+    """List all check-ins awaiting supervisor approval (off-network check-ins)"""
+    return await AttendanceService.list_pending_checkin_approvals(session, current_user, branch)
 
 
 @router.post("/{id}/approve", response_model=AttendanceOut)

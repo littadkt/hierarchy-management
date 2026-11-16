@@ -1805,12 +1805,23 @@ class TaskService:
                 detail=f"Task is in '{task.status.value}' status, not 'PENDING_APPROVAL'.",
             )
 
-        # Check authorization: only the designated approver or a Super Admin
+        # Check authorization: designated approver, branch Admin, or Super Admin
         is_approver = (task.approver_id == operator.id)
         is_super_admin = (operator.role == Role.SUPER_ADMIN)
-        if not (is_approver or is_super_admin):
+        is_branch_admin = False
+        if operator.role == Role.ADMIN:
+            if not operator.branch or not operator.branch.strip():
+                is_branch_admin = True
+            elif task.assigned_to and task.assigned_to.branch:
+                is_branch_admin = (operator.branch.strip().lower() == task.assigned_to.branch.strip().lower())
+            elif task.created_by and task.created_by.branch:
+                is_branch_admin = (operator.branch.strip().lower() == task.created_by.branch.strip().lower())
+            else:
+                is_branch_admin = True
+
+        if not (is_approver or is_super_admin or is_branch_admin):
             raise HierarchyPermissionError(
-                "Only the designated approver or a Super Admin can approve/reject this task."
+                "Only the designated approver, a branch Admin, or a Super Admin can approve/reject this task."
             )
 
         old_status = task.status

@@ -16,10 +16,24 @@ class UserBase(BaseModel):
     check_in_time: Optional[str] = Field(None, description="HH:MM (e.g. 09:00)")
     check_out_time: Optional[str] = Field(None, description="HH:MM (e.g. 18:00)")
 
+    @field_validator("schedule_id", mode="before")
+    @classmethod
+    def empty_str_to_none_schedule(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8, max_length=128)
     reports_to_id: Optional[uuid.UUID] = None
+
+    @field_validator("schedule_id", mode="before")
+    @classmethod
+    def empty_str_to_none_schedule(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
 
     @field_validator("password")
     @classmethod
@@ -48,6 +62,13 @@ class UserUpdate(BaseModel):
     leave_date: Optional[str] = None
     leave_reason: Optional[str] = None
     permissions: Optional[dict] = None
+
+    @field_validator("schedule_id", mode="before")
+    @classmethod
+    def empty_str_to_none_schedule(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
 
     @field_validator("password")
     def validate_password(cls, v: Optional[str]) -> Optional[str]:

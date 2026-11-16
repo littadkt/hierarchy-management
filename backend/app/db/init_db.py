@@ -159,7 +159,7 @@ async def init_models() -> None:
                 ('a0000000-0000-0000-0000-000000000001', 'General Shift (09:00 AM - 06:00 PM)', '09:00', '18:00', 10, 3, 'Standard 9-hour workday with 10-minute grace buffer (max 3 days/month)', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
                 ('a0000000-0000-0000-0000-000000000002', 'Morning Shift (08:00 AM - 05:00 PM)', '08:00', '17:00', 10, 3, 'Early morning shift with 10-minute grace buffer (max 3 days/month)', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
                 ('a0000000-0000-0000-0000-000000000003', 'Late Shift (10:00 AM - 07:00 PM)', '10:00', '19:00', 10, 3, 'Mid-morning shift with 10-minute grace buffer (max 3 days/month)', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT (name) DO NOTHING;
+            ON CONFLICT DO NOTHING;
             """)
         )
         await conn.execute(

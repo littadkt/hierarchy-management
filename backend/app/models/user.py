@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, List, Optional
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, String, inspect
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -141,14 +141,14 @@ class User(Base):
     schedule: Mapped[Optional["TimeSchedule"]] = relationship(
         "TimeSchedule",
         foreign_keys=[schedule_id],
-        back_populates="users",
-        lazy="joined",
+        lazy="selectin",
     )
 
     @property
     def schedule_name(self) -> Optional[str]:
-        if self.schedule:
-            return self.schedule.name
+        insp = inspect(self)
+        if "schedule" in insp.dict and insp.dict["schedule"] is not None:
+            return insp.dict["schedule"].name
         return None
 
     # Self-referential relationships

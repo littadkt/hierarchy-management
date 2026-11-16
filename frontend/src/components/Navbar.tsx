@@ -29,15 +29,15 @@ export const Navbar: React.FC = () => {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
   const refreshPendingCount = () => {
-    if (user) {
+    if (user && user.role !== "STAFF") {
       Promise.all([
         approvalsApi.getPending().catch(() => []),
-        user.role === "SUPER_ADMIN" || user.role === "ADMIN"
-          ? attendanceApi.getPendingApprovals().catch(() => [])
-          : Promise.resolve([]),
+        attendanceApi.getPendingApprovals().catch(() => []),
       ]).then(([tasks, checkins]) => {
         setPendingCount(tasks.length + checkins.length);
       });
+    } else {
+      setPendingCount(0);
     }
   };
 

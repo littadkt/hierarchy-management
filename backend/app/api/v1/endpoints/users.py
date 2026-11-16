@@ -28,7 +28,32 @@ async def create_user(
     - Team leader: Can create Staff
     - Staff: Restricted from creating users
     """
-    return await UserService.create_user(session, current_user, user_in)
+    user = await UserService.create_user(session, current_user, user_in)
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        is_purchase_manager=user.is_purchase_manager,
+        can_place_wholesale_orders=user.can_place_wholesale_orders,
+        branch=user.branch,
+        department=user.department,
+        schedule_id=user.schedule_id,
+        check_in_time=user.check_in_time,
+        check_out_time=user.check_out_time,
+        schedule_name=user.schedule_name,
+        reports_to_id=user.reports_to_id,
+        created_by_id=user.created_by_id,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        last_login_at=None,
+        today_first_login_at=None,
+        is_on_leave=user.is_on_leave,
+        leave_date=user.leave_date,
+        leave_reason=user.leave_reason,
+        permissions=PermissionService.get_user_permissions(user),
+    )
 
 
 @router.get("/assignable", response_model=List[UserBrief])
@@ -95,6 +120,10 @@ async def list_users(
                 can_place_wholesale_orders=u.can_place_wholesale_orders,
                 branch=u.branch,
                 department=u.department,
+                schedule_id=u.schedule_id,
+                check_in_time=u.check_in_time,
+                check_out_time=u.check_out_time,
+                schedule_name=u.schedule_name,
                 reports_to_id=u.reports_to_id,
                 created_by_id=u.created_by_id,
                 created_at=u.created_at,
@@ -138,6 +167,10 @@ async def get_user(
         can_place_wholesale_orders=user.can_place_wholesale_orders,
         branch=user.branch,
         department=user.department,
+        schedule_id=user.schedule_id,
+        check_in_time=user.check_in_time,
+        check_out_time=user.check_out_time,
+        schedule_name=user.schedule_name,
         reports_to_id=user.reports_to_id,
         created_by_id=user.created_by_id,
         created_at=user.created_at,
@@ -176,6 +209,10 @@ async def set_user_leave(
         can_place_wholesale_orders=user.can_place_wholesale_orders,
         branch=user.branch,
         department=user.department,
+        schedule_id=user.schedule_id,
+        check_in_time=user.check_in_time,
+        check_out_time=user.check_out_time,
+        schedule_name=user.schedule_name,
         reports_to_id=user.reports_to_id,
         created_by_id=user.created_by_id,
         created_at=user.created_at,
@@ -204,7 +241,35 @@ async def update_user(
     - Team Leader CANNOT edit Staff
     - Staff CANNOT edit others
     """
-    return await UserService.update_user(session, current_user, user_id, user_in)
+    user = await UserService.update_user(session, current_user, user_id, user_in)
+    can_see_login = current_user.role in [Role.SUPER_ADMIN, Role.ADMIN] or current_user.id == user.id
+    today_login = UserService.get_effective_today_first_login(user) if can_see_login else None
+    last_login = user.last_login_at if can_see_login else None
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        is_purchase_manager=user.is_purchase_manager,
+        can_place_wholesale_orders=user.can_place_wholesale_orders,
+        branch=user.branch,
+        department=user.department,
+        schedule_id=user.schedule_id,
+        check_in_time=user.check_in_time,
+        check_out_time=user.check_out_time,
+        schedule_name=user.schedule_name,
+        reports_to_id=user.reports_to_id,
+        created_by_id=user.created_by_id,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        last_login_at=last_login,
+        today_first_login_at=today_login,
+        is_on_leave=user.is_on_leave,
+        leave_date=user.leave_date,
+        leave_reason=user.leave_reason,
+        permissions=PermissionService.get_user_permissions(user),
+    )
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

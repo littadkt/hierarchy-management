@@ -15,6 +15,7 @@ from app.core.permissions import (
 )
 from app.core.security import get_password_hash
 from app.models.attendance import Attendance, AttendanceStatus
+from app.models.schedule import TimeSchedule
 from app.models.task import Task, TaskStatus
 from app.models.user import Role, User, UserLoginRecord
 from app.schemas.user import UserCreate, UserLeaveUpdate, UserTaskStats, UserUpdate, UserWithStats
@@ -26,7 +27,11 @@ class UserService:
         stmt = (
             select(User)
             .where(User.id == user_id)
-            .options(selectinload(User.manager), selectinload(User.creator))
+            .options(
+                selectinload(User.manager),
+                selectinload(User.creator),
+                selectinload(User.schedule),
+            )
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
@@ -149,6 +154,14 @@ class UserService:
             if user_in.check_out_time and user_in.check_out_time.strip()
             else None
         )
+        selected_schedule = None
+        if schedule_id:
+            selected_schedule = await session.get(TimeSchedule, schedule_id)
+            if selected_schedule:
+                if not check_in_time:
+                    check_in_time = selected_schedule.check_in_time
+                if not check_out_time:
+                    check_out_time = selected_schedule.check_out_time
 
         user = User(
             email=user_in.email,
@@ -159,7 +172,8 @@ class UserService:
             can_place_wholesale_orders=can_place_wholesale_orders,
             branch=branch,
             department=department,
-            schedule_id=schedule_id,
+            schedule_id=selected_schedule.id if selected_schedule else schedule_id,
+            schedule=selected_schedule,
             check_in_time=check_in_time,
             check_out_time=check_out_time,
             reports_to_id=reports_to_id,
@@ -167,7 +181,6 @@ class UserService:
         )
         session.add(user)
         await session.commit()
-        await session.refresh(user)
         return user
 
     @staticmethod
@@ -219,13 +232,32 @@ class UserService:
         if user_in.department is not None:
             target.department = user_in.department.strip() if user_in.department and user_in.department.strip() else None
 
-        if hasattr(user_in, "schedule_id") and user_in.schedule_id is not None:
-            target.schedule_id = user_in.schedule_id
+        if "schedule_id" in user_in.model_fields_set:
+            if user_in.schedule_id is not None:
+                new_schedule = await session.get(TimeSchedule, user_in.schedule_id)
+                if not new_schedule:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Selected time schedule does not exist.",
+                    )
+                target.schedule = new_schedule
+                target.schedule_id = new_schedule.id
+                if "check_in_time" not in user_in.model_fields_set or not user_in.check_in_time:
+                    target.check_in_time = new_schedule.check_in_time
+                if "check_out_time" not in user_in.model_fields_set or not user_in.check_out_time:
+                    target.check_out_time = new_schedule.check_out_time
+            else:
+                target.schedule = None
+                target.schedule_id = None
+                if "check_in_time" not in user_in.model_fields_set:
+                    target.check_in_time = None
+                if "check_out_time" not in user_in.model_fields_set:
+                    target.check_out_time = None
 
-        if hasattr(user_in, "check_in_time") and user_in.check_in_time is not None:
+        if "check_in_time" in user_in.model_fields_set and user_in.check_in_time is not None:
             target.check_in_time = user_in.check_in_time.strip() if user_in.check_in_time.strip() else None
 
-        if hasattr(user_in, "check_out_time") and user_in.check_out_time is not None:
+        if "check_out_time" in user_in.model_fields_set and user_in.check_out_time is not None:
             target.check_out_time = user_in.check_out_time.strip() if user_in.check_out_time.strip() else None
 
         if user_in.is_on_leave is not None and operator.role in [Role.SUPER_ADMIN, Role.ADMIN]:
@@ -241,7 +273,6 @@ class UserService:
             target.permissions = user_in.permissions
 
         await session.commit()
-        await session.refresh(target)
         return target
 
     @staticmethod
@@ -518,7 +549,11 @@ class UserService:
         """
         stmt = (
             select(User)
-            .options(selectinload(User.manager), selectinload(User.creator))
+            .options(
+                selectinload(User.manager),
+                selectinload(User.creator),
+                selectinload(User.schedule),
+            )
             .order_by(User.role, User.full_name)
         )
         if current_user.role == Role.SUPER_ADMIN:
@@ -591,7 +626,11 @@ class UserService:
         if current_user.role == Role.SUPER_ADMIN:
             stmt = (
                 select(User)
-                .options(selectinload(User.manager), selectinload(User.creator))
+                .options(
+                    selectinload(User.manager),
+                    selectinload(User.creator),
+                    selectinload(User.schedule),
+                )
                 .order_by(User.role, User.full_name)
             )
         elif current_user.role == Role.ADMIN:
@@ -601,7 +640,11 @@ class UserService:
                     (User.role.in_([Role.IN_CHARGE, Role.TEAM_LEADER, Role.STAFF]))
                     | (User.id == current_user.id)
                 )
-                .options(selectinload(User.manager), selectinload(User.creator))
+                .options(
+                    selectinload(User.manager),
+                    selectinload(User.creator),
+                    selectinload(User.schedule),
+                )
                 .order_by(User.role, User.full_name)
             )
         elif current_user.role == Role.IN_CHARGE:
@@ -624,7 +667,11 @@ class UserService:
             stmt = (
                 select(User)
                 .where(sub_filter | (User.id == current_user.id))
-                .options(selectinload(User.manager), selectinload(User.creator))
+                .options(
+                    selectinload(User.manager),
+                    selectinload(User.creator),
+                    selectinload(User.schedule),
+                )
                 .order_by(User.role, User.full_name)
             )
         elif current_user.role == Role.TEAM_LEADER:
@@ -647,7 +694,11 @@ class UserService:
             stmt = (
                 select(User)
                 .where(staff_filter | (User.id == current_user.id))
-                .options(selectinload(User.manager), selectinload(User.creator))
+                .options(
+                    selectinload(User.manager),
+                    selectinload(User.creator),
+                    selectinload(User.schedule),
+                )
                 .order_by(User.role, User.full_name)
             )
         else:
@@ -713,6 +764,10 @@ class UserService:
                     is_active=u.is_active,
                     branch=u.branch,
                     department=u.department,
+                    schedule_id=u.schedule_id,
+                    check_in_time=u.check_in_time,
+                    check_out_time=u.check_out_time,
+                    schedule_name=u.schedule_name,
                     reports_to_id=u.reports_to_id,
                     created_by_id=u.created_by_id,
                     created_at=u.created_at,

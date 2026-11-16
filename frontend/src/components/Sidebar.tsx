@@ -45,7 +45,9 @@ export const Sidebar: React.FC = () => {
     { label: "Attendance", href: "/attendance", icon: CalendarCheck2, windowKey: "attendance" },
     { label: "Tasks", href: "/tasks", icon: CheckSquare, windowKey: "tasks" },
     { label: "My Checklist", href: "/checklist", icon: ListTodo, windowKey: "checklist" },
-    { label: "Approvals", href: "/approvals", icon: ShieldAlert, windowKey: "approvals" },
+    ...(user.role !== "STAFF"
+      ? [{ label: "Approvals", href: "/approvals", icon: ShieldAlert, windowKey: "approvals" }]
+      : []),
     { label: "Purchase Desk", href: "/purchases", icon: ShoppingBag, windowKey: "purchases" },
     { label: "Inventory", href: "/inventory", icon: Boxes, windowKey: "inventory" },
     { label: "Warranty", href: "/warranty", icon: Wrench, windowKey: "warranty" },

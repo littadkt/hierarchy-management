@@ -53,5 +53,8 @@ class TimeSchedule(Base):
 
     # Relationships
     users: Mapped[List["User"]] = relationship(
-        "User", back_populates="schedule", foreign_keys="User.schedule_id"
+        "User",
+        foreign_keys="User.schedule_id",
+        lazy="selectin",
+        viewonly=True,
     )

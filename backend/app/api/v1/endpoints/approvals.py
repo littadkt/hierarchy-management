@@ -26,15 +26,22 @@ async def get_pending_approvals(
     approver_id: Optional[uuid.UUID] = Query(None, description="Filter by designated approver ID"),
     priority: Optional[str] = Query(None, description="Filter by priority: LOW, MEDIUM, HIGH, URGENT"),
     submitted_date: Optional[str] = Query(None, description="Filter strictly by submission date (YYYY-MM-DD)"),
+    branch: Optional[str] = Query(None, description="Filter by branch name"),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
     """
     List all tasks currently awaiting approval:
-    - Super Admin: sees all tasks awaiting approval
-    - Approvers: sees tasks where current user is designated approver
-    Supports sorting and filtering by submitted by, priority, submitted date, and designated approver.
+    - Super Admin: sees all tasks awaiting approval across branches
+    - Admin: sees tasks awaiting approval in their branch or designated to them
+    - In-Charge / Team Leader: sees tasks where designated approver
+    - Staff (Level 5): no approval authorization (returns empty list)
+    Supports sorting and filtering by branch, submitter, priority, date, and designated approver.
     """
+    # Level 5 staff has no approval authorization
+    if current_user.role == Role.STAFF:
+        return []
+
     stmt = (
         select(Task)
         .where(
@@ -48,10 +55,51 @@ async def get_pending_approvals(
         )
     )
 
-    if current_user.role != Role.SUPER_ADMIN:
-        stmt = stmt.where(Task.approver_id == current_user.id)
-    elif approver_id:
-        stmt = stmt.where(Task.approver_id == approver_id)
+    if current_user.role == Role.SUPER_ADMIN:
+        if approver_id:
+            stmt = stmt.where(Task.approver_id == approver_id)
+    elif current_user.role == Role.ADMIN:
+        if current_user.branch and current_user.branch.strip():
+            admin_b = current_user.branch.strip().lower()
+            assignee_b = aliased(User)
+            creator_b = aliased(User)
+            stmt = (
+                stmt
+                .outerjoin(assignee_b, Task.assigned_to_id == assignee_b.id)
+                .outerjoin(creator_b, Task.created_by_id == creator_b.id)
+                .where(
+                    or_(
+                        func.lower(func.trim(assignee_b.branch)) == admin_b,
+                        func.lower(func.trim(creator_b.branch)) == admin_b,
+                        Task.approver_id == current_user.id,
+                    )
+                )
+            )
+        if approver_id:
+            stmt = stmt.where(Task.approver_id == approver_id)
+    else:
+        # IN_CHARGE or TEAM_LEADER
+        if approver_id:
+            stmt = stmt.where(Task.approver_id == approver_id)
+        else:
+            stmt = stmt.where(Task.approver_id == current_user.id)
+
+    # Branch-wise filtration
+    if branch and branch.strip() and branch.strip().upper() != "ALL":
+        b_clean = branch.strip().lower()
+        branch_assignee = aliased(User)
+        branch_creator = aliased(User)
+        stmt = (
+            stmt
+            .outerjoin(branch_assignee, Task.assigned_to_id == branch_assignee.id)
+            .outerjoin(branch_creator, Task.created_by_id == branch_creator.id)
+            .where(
+                or_(
+                    func.lower(func.trim(branch_assignee.branch)) == b_clean,
+                    func.lower(func.trim(branch_creator.branch)) == b_clean,
+                )
+            )
+        )
 
     if submitted_by_id:
         stmt = stmt.where(

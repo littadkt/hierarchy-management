@@ -122,8 +122,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (user.role === "TEAM_LEADER") {
       if (["backup", "branches", "departments", "wholesale"].includes(windowId)) return false;
       if (action === "display") return true;
-      if (["tasks", "subtasks", "checklist", "warranty", "warranty_jobs", "attendance"].includes(windowId) && ["add", "edit"].includes(action)) return true;
-      if (windowId === "approvals" && action === "add") return true;
+      if (["tasks", "subtasks", "checklist", "approvals", "warranty", "warranty_jobs", "attendance"].includes(windowId) && ["add", "edit"].includes(action)) return true;
       return false;
     }
 
