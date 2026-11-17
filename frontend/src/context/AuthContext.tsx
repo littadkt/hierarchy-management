@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authApi } from "@/lib/api";
 import { User } from "@/lib/types";
@@ -23,10 +23,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
   const router = useRouter();
 
+  // Track the current tab's active session ID in a ref for listener comparisons
+  const currentSessionIdRef = useRef<string | null>(null);
+
   const refreshUser = async () => {
     try {
       const currentUser = await authApi.getMe();
       setUser(currentUser);
+      if (currentUser.active_session_id) {
+        currentSessionIdRef.current = currentUser.active_session_id;
+        localStorage.setItem("sessionId", currentUser.active_session_id);
+      }
     } catch {
       logout();
     }
@@ -34,15 +41,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const savedToken = localStorage.getItem("token");
+    const savedSessionId = localStorage.getItem("sessionId");
+    if (savedSessionId) {
+      currentSessionIdRef.current = savedSessionId;
+    }
+
     if (savedToken) {
       setToken(savedToken);
       authApi
         .getMe()
         .then((userData) => {
           setUser(userData);
+          if (userData.active_session_id) {
+            currentSessionIdRef.current = userData.active_session_id;
+            localStorage.setItem("sessionId", userData.active_session_id);
+          }
         })
         .catch(() => {
           localStorage.removeItem("token");
+          localStorage.removeItem("sessionId");
+          currentSessionIdRef.current = null;
           setToken(null);
           setUser(null);
         })
@@ -54,16 +72,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  // Multi-tab single session synchronization
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === "token" && !e.newValue) {
         setToken(null);
         setUser(null);
         router.push("/login");
+      } else if (
+        e.key === "sessionId" &&
+        e.newValue &&
+        currentSessionIdRef.current &&
+        e.newValue !== currentSessionIdRef.current
+      ) {
+        // Another tab on this browser signed in with a new session ID
+        setToken(null);
+        setUser(null);
+        router.push("/login?superseded=1");
       }
     };
     window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
+
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        channel = new BroadcastChannel("littad_auth_channel");
+        channel.onmessage = (event) => {
+          if (event.data?.type === "NEW_LOGIN") {
+            const newSid = event.data.sessionId;
+            if (
+              currentSessionIdRef.current &&
+              newSid &&
+              newSid !== currentSessionIdRef.current
+            ) {
+              setToken(null);
+              setUser(null);
+              router.push("/login?superseded=1");
+            }
+          }
+        };
+      } catch (_) {}
+    }
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      if (channel) {
+        channel.close();
+      }
+    };
   }, [router]);
 
   const login = async (email: string, pass: string) => {
@@ -71,8 +127,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const data = await authApi.login(email, pass);
       localStorage.setItem("token", data.access_token);
+      if (data.session_id) {
+        localStorage.setItem("sessionId", data.session_id);
+        currentSessionIdRef.current = data.session_id;
+      }
       setToken(data.access_token);
       setUser(data.user);
+
+      // Notify other open tabs in this browser that a new login session started
+      try {
+        if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+          const bc = new BroadcastChannel("littad_auth_channel");
+          bc.postMessage({
+            type: "NEW_LOGIN",
+            userId: data.user.id,
+            sessionId: data.session_id,
+          });
+          bc.close();
+        }
+      } catch (_) {}
+
       router.push("/");
     } finally {
       setLoading(false);
@@ -84,6 +158,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await authApi.logout();
     } catch (_) {}
     localStorage.removeItem("token");
+    localStorage.removeItem("sessionId");
+    currentSessionIdRef.current = null;
     setToken(null);
     setUser(null);
     router.push("/login");

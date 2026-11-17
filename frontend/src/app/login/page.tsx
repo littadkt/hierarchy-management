@@ -14,11 +14,14 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expiredNotice, setExpiredNotice] = useState(false);
+  const [supersededNotice, setSupersededNotice] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      if (params.get("expired") === "1") {
+      if (params.get("superseded") === "1") {
+        setSupersededNotice(true);
+      } else if (params.get("expired") === "1") {
         setExpiredNotice(true);
       }
     }
@@ -69,6 +72,13 @@ export default function LoginPage() {
 
         {/* Login Box */}
         <div className="bg-white dark:bg-slate-800/80 backdrop-blur-md border border-slate-200 dark:border-slate-700/60 p-6 sm:p-8 rounded-3xl shadow-xl dark:shadow-2xl transition-colors duration-200">
+          {supersededNotice && (
+            <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs rounded-xl flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>You have been logged out because your account was logged in from another device, tab, or window. Only one active login session is permitted.</span>
+            </div>
+          )}
+
           {expiredNotice && (
             <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs rounded-xl flex items-start gap-2">
               <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" />

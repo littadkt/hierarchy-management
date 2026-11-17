@@ -184,6 +184,12 @@ async def init_models() -> None:
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSON DEFAULT '{}';")
         )
         await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS active_session_id VARCHAR(64);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_users_active_session_id ON users (active_session_id);")
+        )
+        await conn.execute(
             text("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id UUID PRIMARY KEY,

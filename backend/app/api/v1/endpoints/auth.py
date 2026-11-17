@@ -34,6 +34,7 @@ class LoginJSONRequest(BaseModel):
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    session_id: Optional[str] = None
     user: UserOut
 
 
@@ -147,7 +148,11 @@ async def login_access_token(
 
     access_token = create_access_token(
         subject=user.id,
-        extra_claims={"role": user.role.value, "email": user.email},
+        extra_claims={
+            "role": user.role.value,
+            "email": user.email,
+            "sid": user.active_session_id,
+        },
     )
 
     logger.info(f"User '{user.email}' logged in successfully from IP {client_ip}")
@@ -163,6 +168,7 @@ async def login_access_token(
     return {
         "access_token": access_token,
         "token_type": "bearer",
+        "session_id": user.active_session_id,
         "user": user,
     }
 
@@ -233,7 +239,11 @@ async def login_json(
 
     access_token = create_access_token(
         subject=user.id,
-        extra_claims={"role": user.role.value, "email": user.email},
+        extra_claims={
+            "role": user.role.value,
+            "email": user.email,
+            "sid": user.active_session_id,
+        },
     )
 
     logger.info(f"User '{user.email}' logged in successfully via JSON from IP {client_ip}")
@@ -249,6 +259,7 @@ async def login_json(
     return {
         "access_token": access_token,
         "token_type": "bearer",
+        "session_id": user.active_session_id,
         "user": user,
     }
 
@@ -298,10 +309,14 @@ async def change_password(
 @router.post("/logout", response_model=MessageResponse)
 async def logout(
     current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
 ) -> Any:
     """
-    Logs out the authenticated user and logs the session termination.
+    Logs out the authenticated user and clears their active session ID.
     """
+    current_user.active_session_id = None
+    session.add(current_user)
+    await session.commit()
     logger.info(f"User '{current_user.email}' logged out.")
     return {"message": "Logged out successfully."}
 

@@ -48,6 +48,7 @@ import {
   AppNotification,
   NotificationListResponse,
   ApprovalPendingContext,
+  AuthResponse,
 } from "./types";
 
 /**
@@ -121,8 +122,13 @@ api.interceptors.response.use(
         const isAuthEndpoint = error.config?.url?.includes("/auth/login");
         if (!isAuthEndpoint) {
           localStorage.removeItem("token");
+          localStorage.removeItem("sessionId");
+          const detail = error.response?.data?.detail;
+          const isSuperseded =
+            typeof detail === "string" && detail.toLowerCase().includes("superseded");
+          const query = isSuperseded ? "superseded=1" : "expired=1";
           if (!window.location.pathname.startsWith("/login")) {
-            window.location.href = "/login?expired=1";
+            window.location.href = `/login?${query}`;
           }
         }
       }
@@ -146,8 +152,8 @@ export const getErrorMessage = (error: unknown): string => {
 
 // API Services
 export const authApi = {
-  login: async (email: string, password: string) => {
-    const response = await api.post("/auth/login/json", { email, password });
+  login: async (email: string, password: string): Promise<AuthResponse> => {
+    const response = await api.post<AuthResponse>("/auth/login/json", { email, password });
     return response.data;
   },
   getMe: async (): Promise<User> => {

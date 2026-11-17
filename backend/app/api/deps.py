@@ -46,6 +46,24 @@ async def get_current_user(
             detail="Inactive user account",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Enforce single active session per user
+    token_sid = payload.get("sid")
+    if user.active_session_id is not None:
+        if token_sid != user.active_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session superseded. You have been logged out because this account was logged in from another device or window.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    else:
+        # If user has no active session in the database (e.g. logged out or revoked)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired or terminated. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user
 
 

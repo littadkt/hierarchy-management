@@ -117,3 +117,66 @@ async def test_change_password_workflow(async_client: AsyncClient):
     )
     assert revert_res.status_code == 200
 
+
+@pytest.mark.asyncio
+async def test_single_active_session_enforcement(async_client: AsyncClient):
+    """
+    Verify single active session policy:
+    1. Login from Session 1 -> works.
+    2. Login from Session 2 (another device/tab) -> Session 2 works.
+    3. Session 1 is superseded and gets 401.
+    4. Explicit logout clears active session so even the last token is terminated.
+    """
+    login_rate_limiter.reset()
+
+    # 1. Login Session 1 (e.g. Browser 1 / Tab 1)
+    res_1 = await async_client.post(
+        "/api/v1/auth/login/json",
+        json={"email": "staff1@example.com", "password": "Staff@123"},
+    )
+    assert res_1.status_code == 200
+    data_1 = res_1.json()
+    token_1 = data_1["access_token"]
+    sid_1 = data_1.get("session_id")
+    assert sid_1 is not None
+
+    headers_1 = {"Authorization": f"Bearer {token_1}"}
+
+    # Verify Session 1 works
+    me_1 = await async_client.get("/api/v1/auth/me", headers=headers_1)
+    assert me_1.status_code == 200
+    assert me_1.json()["email"] == "staff1@example.com"
+
+    # 2. Login Session 2 (e.g. Browser 2 / Tab 2 / another system)
+    res_2 = await async_client.post(
+        "/api/v1/auth/login/json",
+        json={"email": "staff1@example.com", "password": "Staff@123"},
+    )
+    assert res_2.status_code == 200
+    data_2 = res_2.json()
+    token_2 = data_2["access_token"]
+    sid_2 = data_2.get("session_id")
+    assert sid_2 is not None
+    assert sid_2 != sid_1, "Each new login session must generate a distinct session_id"
+
+    headers_2 = {"Authorization": f"Bearer {token_2}"}
+
+    # Verify Session 2 works
+    me_2 = await async_client.get("/api/v1/auth/me", headers=headers_2)
+    assert me_2.status_code == 200
+    assert me_2.json()["email"] == "staff1@example.com"
+
+    # 3. Session 1 MUST be rejected with 401 because it was superseded
+    me_1_superseded = await async_client.get("/api/v1/auth/me", headers=headers_1)
+    assert me_1_superseded.status_code == 401
+    assert "superseded" in me_1_superseded.json()["detail"].lower()
+
+    # 4. Explicit logout with Session 2
+    logout_res = await async_client.post("/api/v1/auth/logout", headers=headers_2)
+    assert logout_res.status_code == 200
+
+    # 5. Session 2 is now terminated and should also be rejected with 401
+    me_2_terminated = await async_client.get("/api/v1/auth/me", headers=headers_2)
+    assert me_2_terminated.status_code == 401
+
+

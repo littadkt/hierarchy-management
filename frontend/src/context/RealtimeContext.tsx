@@ -156,6 +156,22 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
             if (parsed.type === "ping") {
               return; // Keep-alive heartbeat
             }
+            if (parsed.type === "USER_SESSION_SUPERSEDED") {
+              const currentUserId = user?.id;
+              const currentSessionId = localStorage.getItem("sessionId");
+              if (
+                currentUserId &&
+                parsed.data?.user_id === currentUserId &&
+                parsed.data?.active_session_id &&
+                parsed.data?.active_session_id !== currentSessionId
+              ) {
+                console.warn("[Realtime] Session superseded by a new login on another device or tab.");
+                localStorage.removeItem("token");
+                localStorage.removeItem("sessionId");
+                window.location.href = "/login?superseded=1";
+                return;
+              }
+            }
             broadcastToSubscribers(parsed);
           } catch (err) {
             console.warn("[Realtime] Error parsing event:", err);

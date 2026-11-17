@@ -67,16 +67,21 @@ class UserService:
         user: User,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> User:
         """
         Records a user login event:
+        - Generates and saves a new active_session_id to enforce single active session.
         - Updates last_login_at to now.
         - Saves an audit record in user_login_records.
-        - Broadcasts a realtime USER_LOGIN event.
+        - Broadcasts realtime USER_SESSION_SUPERSEDED and USER_LOGIN events.
         - Note: Does NOT automatically check in the user. Check-in is manual via AttendanceService.
         """
         now = datetime.now(timezone.utc)
+        if not session_id:
+            session_id = uuid.uuid4().hex
 
+        user.active_session_id = session_id
         user.last_login_at = now
 
         # Add audit record
@@ -87,8 +92,18 @@ class UserService:
             user_agent=user_agent,
         )
         session.add(login_log)
+        session.add(user)
         await session.commit()
         await session.refresh(user)
+
+        # Notify other connected clients/tabs that this user logged in elsewhere
+        await broadcaster.broadcast({
+            "type": "USER_SESSION_SUPERSEDED",
+            "data": {
+                "user_id": str(user.id),
+                "active_session_id": session_id,
+            },
+        })
 
         await broadcaster.broadcast({
             "type": "USER_LOGIN",

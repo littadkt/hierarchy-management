@@ -115,6 +115,11 @@ class User(Base):
         nullable=True,
         index=True,
     )
+    active_session_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
 
     # Leave tracking fields
     is_on_leave: Mapped[bool] = mapped_column(

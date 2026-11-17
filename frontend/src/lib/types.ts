@@ -110,6 +110,7 @@ export interface User {
   is_on_leave?: boolean;
   leave_date?: string | null;
   leave_reason?: string | null;
+  active_session_id?: string | null;
   permissions?: UserPermissions;
   task_stats?: UserTaskStats;
   manager_name?: string | null;
@@ -687,6 +688,13 @@ export interface ApprovalPendingContext {
   assignee?: UserPendingSummary | null;
   primary_user: UserPendingSummary;
   total_pending_count: number;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+  session_id?: string | null;
+  user: User;
 }
 
 

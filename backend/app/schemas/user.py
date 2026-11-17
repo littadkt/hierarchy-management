@@ -61,6 +61,7 @@ class UserUpdate(BaseModel):
     is_on_leave: Optional[bool] = None
     leave_date: Optional[str] = None
     leave_reason: Optional[str] = None
+    active_session_id: Optional[str] = None
     permissions: Optional[dict] = None
 
     @field_validator("schedule_id", mode="before")
@@ -116,6 +117,7 @@ class UserBrief(BaseModel):
     is_on_leave: bool = False
     leave_date: Optional[str] = None
     leave_reason: Optional[str] = None
+    active_session_id: Optional[str] = None
     permissions: Optional[dict] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -141,6 +143,7 @@ class UserOut(UserBase):
     is_on_leave: bool = False
     leave_date: Optional[str] = None
     leave_reason: Optional[str] = None
+    active_session_id: Optional[str] = None
     permissions: Optional[dict] = None
 
     model_config = ConfigDict(from_attributes=True)
