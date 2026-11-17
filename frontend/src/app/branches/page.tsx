@@ -494,9 +494,12 @@ export default function BranchesPage() {
                         type="text"
                         value={formAllowedWifiIps}
                         onChange={(e) => setFormAllowedWifiIps(e.target.value)}
-                        placeholder="e.g. 192.168.1.0/24, 103.45.67.89, 127.0.0.1"
+                        placeholder="e.g. 192.168.100.0/24, 103.70.197.110"
                         className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Comma-separated public WAN IP (e.g. office router IP for domain access) or LAN subnet (e.g. 192.168.100.0/24). Do not enter 127.0.0.1.
+                      </p>
                     </div>
                   </div>
                 </div>

@@ -31,13 +31,25 @@ logger = logging.getLogger(__name__)
 
 
 def get_host_lan_ips() -> List[str]:
-    """Retrieve host machine's active non-loopback network IPv4 addresses"""
-    lan_ips: List[str] = []
+    """Retrieve host machine's active non-loopback network IPv4 addresses and global IPv6 prefixes."""
+    host_ips: List[str] = []
     try:
         hostname = socket.gethostname()
-        for ip in socket.gethostbyname_ex(hostname)[2]:
-            if not ip.startswith("127.") and ":" not in ip and ip not in lan_ips:
-                lan_ips.append(ip)
+        for item in socket.getaddrinfo(hostname, None):
+            ip_candidate = item[4][0]
+            try:
+                ip_obj = ipaddress.ip_address(ip_candidate)
+                if ip_obj.is_loopback:
+                    continue
+                if isinstance(ip_obj, ipaddress.IPv4Address) and not ip_candidate.startswith("127."):
+                    if ip_candidate not in host_ips:
+                        host_ips.append(ip_candidate)
+                elif isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.is_global and not ip_obj.is_loopback:
+                    net_desc = f"{ipaddress.ip_network(f'{ip_candidate}/64', strict=False)}"
+                    if net_desc not in host_ips:
+                        host_ips.append(net_desc)
+            except ValueError:
+                continue
     except Exception:
         pass
     try:
@@ -45,11 +57,31 @@ def get_host_lan_ips() -> List[str]:
         s.connect(("8.8.8.8", 80))
         routed = s.getsockname()[0]
         s.close()
-        if routed and routed not in lan_ips and not routed.startswith("127."):
-            lan_ips.append(routed)
+        if routed and routed not in host_ips and not routed.startswith("127."):
+            host_ips.append(routed)
     except Exception:
         pass
-    return lan_ips
+    return host_ips
+
+
+def get_host_ipv6_prefixes() -> List[Any]:
+    """Retrieve host machine's active global IPv6 delegated /64 subnets."""
+    prefixes: List[Any] = []
+    try:
+        hostname = socket.gethostname()
+        for item in socket.getaddrinfo(hostname, None):
+            ip_str = item[4][0]
+            try:
+                ip_obj = ipaddress.ip_address(ip_str)
+                if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.is_global and not ip_obj.is_loopback:
+                    net_64 = ipaddress.ip_network(f"{ip_str}/64", strict=False)
+                    if net_64 not in prefixes:
+                        prefixes.append(net_64)
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return prefixes
 
 
 def parse_clean_ip(ip_str: Optional[str]) -> Optional[Any]:
@@ -72,19 +104,25 @@ def parse_clean_ip(ip_str: Optional[str]) -> Optional[Any]:
         if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
             parsed = parsed.ipv4_mapped
         return parsed
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 
 def is_ip_in_network(client_ip: Optional[str], allowed_str: Optional[str]) -> bool:
     """
-    Check if client_ip matches any exact IP or CIDR block in allowed_str.
+    Check if client_ip matches any authorized office network IP or CIDR block in allowed_str.
     allowed_str can be comma-, semicolon-, or newline-delimited.
     Correctly handles IPv4, IPv6, ports, brackets, and IPv4-mapped IPv6 (::ffff:x.x.x.x).
-    Also recognizes when client is accessing locally (127.0.0.1/::1/localhost) from a host
-    machine whose physical network adapter IP is within the allowed network.
-    Also recognizes when client is connecting through Cloudflare from the same office Wi-Fi
-    router that hosts the server (matching server public WAN IP).
+
+    Security Rules:
+    1. Loopback addresses (127.0.0.1, ::1, localhost) and unspecified (0.0.0.0) NEVER qualify
+       as an authorized office network. Network verification FAILS CLOSED.
+    2. Missing, empty, or malformed visitor IP strings NEVER receive automatic on-network approval.
+    3. Loopback entries inadvertently placed in allowed_str are filtered out and ignored.
+    4. Supports exact IPv4/IPv6 addresses and CIDR subnets (e.g. 192.168.100.0/24, 103.70.197.110/32, 2403:a080:836:e5e3::/64).
+    5. Recognizes client devices accessing from the same office Wi-Fi network:
+       - For IPv6: Device and host share the office router's delegated /64 IPv6 prefix.
+       - For IPv4: Client visitor IP matches the host router's active public WAN IP.
     """
     if not client_ip or not allowed_str:
         return False
@@ -93,57 +131,60 @@ def is_ip_in_network(client_ip: Optional[str], allowed_str: Optional[str]) -> bo
     if not c_ip:
         return False
 
-    def _matches_ip_obj(target_ip: Any, allowed: str) -> bool:
-        entries = [e.strip() for e in allowed.replace(";", ",").replace("\n", ",").split(",") if e.strip()]
-        for entry in entries:
-            clean_entry = entry.strip()
-            if clean_entry == "*":
-                return True
-            if clean_entry.lower() in ("localhost", "127.0.0.1", "::1") and target_ip.is_loopback:
-                return True
-            if clean_entry.lower().startswith("::ffff:") and "." in clean_entry:
-                clean_entry = clean_entry[7:].strip()
-            try:
-                if "/" in clean_entry:
-                    net = ipaddress.ip_network(clean_entry, strict=False)
-                    if target_ip.version == net.version and target_ip in net:
-                        return True
-                else:
-                    entry_ip = parse_clean_ip(clean_entry)
-                    if entry_ip and target_ip == entry_ip:
-                        return True
-            except (ValueError, TypeError):
-                continue
+    # Security: Localhost loopback addresses (127.0.0.1, ::1) or unspecified addresses
+    # must NEVER be approved as office attendance networks!
+    if c_ip.is_loopback or c_ip.is_unspecified:
         return False
 
-    # 1. Direct match check against configured allowed IPs/subnets
-    if _matches_ip_obj(c_ip, allowed_str):
-        return True
+    entries = [
+        e.strip()
+        for e in allowed_str.replace(";", ",").replace("\n", ",").split(",")
+        if e.strip()
+    ]
 
-    # 2. Host Public WAN IP match
-    # If the server host machine is located in the office on the allowed LAN subnet,
-    # and employees access via the Cloudflare Tunnel public domain, their CF-Connecting-IP
-    # will be the office router's public WAN IP.
+    # 1. Direct match check against configured allowed IPs / CIDR subnets (IPv4 or IPv6)
+    for entry in entries:
+        clean_entry = entry.strip()
+        if not clean_entry:
+            continue
+
+        # Ignore wildcard asterisks or loopback addresses in allowlist
+        if clean_entry in ("*", "localhost", "127.0.0.1", "::1", "127.0.0.0/8"):
+            continue
+
+        if clean_entry.lower().startswith("::ffff:") and "." in clean_entry:
+            clean_entry = clean_entry[7:].strip()
+
+        try:
+            net = ipaddress.ip_network(clean_entry, strict=False)
+            if net.is_loopback or net.is_unspecified:
+                continue
+
+            if c_ip.version == net.version and c_ip in net:
+                return True
+        except (ValueError, TypeError):
+            continue
+
+    # 2. Host Network Subnet Match (IPv6 /64 delegated prefix or IPv4 WAN IP)
+    # When employees connect from the office Wi-Fi router to the Cloudflare Tunnel public domain:
+    # A) In IPv6 (no NAT): All devices on the office Wi-Fi router share the same /64 delegated prefix.
+    # B) In IPv4 (NAT): All devices on the office Wi-Fi router share the same public WAN IP.
     try:
+        # IPv6: Verify if visitor's IPv6 address belongs to the host machine's active global /64 prefix
+        if isinstance(c_ip, ipaddress.IPv6Address) and c_ip.is_global:
+            for host_prefix in get_host_ipv6_prefixes():
+                if c_ip in host_prefix:
+                    return True
+
+        # IPv4: Verify if visitor's IPv4 matches host server's public WAN IP
         from app.core.ip_utils import get_server_public_ip
         server_wan_ip = get_server_public_ip()
         if server_wan_ip:
             parsed_wan = parse_clean_ip(server_wan_ip)
-            if parsed_wan and c_ip == parsed_wan:
-                # Ensure the server itself is situated on an allowed LAN network
-                for host_lan_ip in get_host_lan_ips():
-                    parsed_lan = parse_clean_ip(host_lan_ip)
-                    if parsed_lan and _matches_ip_obj(parsed_lan, allowed_str):
-                        return True
-    except Exception as ex:
-        logger.debug(f"Failed host WAN IP check: {ex}")
-
-    # 3. Loopback / Localhost check against server host LAN IP
-    if c_ip.is_loopback:
-        for host_lan_ip in get_host_lan_ips():
-            parsed_lan = parse_clean_ip(host_lan_ip)
-            if parsed_lan and _matches_ip_obj(parsed_lan, allowed_str):
+            if parsed_wan and not parsed_wan.is_loopback and not parsed_wan.is_private and c_ip == parsed_wan:
                 return True
+    except Exception as ex:
+        logger.debug(f"Failed host network check: {ex}")
 
     return False
 
@@ -346,9 +387,9 @@ class AttendanceService:
                 )
             # Re-opening / Resuming attendance session
             record.check_out_time = None
+            record.requires_approval = requires_approval
+            record.approval_status = approval_status
             if requires_approval:
-                record.requires_approval = True
-                record.approval_status = "PENDING"
                 gps_desc = f"GPS: ({latitude:.5f}, {longitude:.5f})" if latitude and longitude else "GPS unavailable"
                 resumed_note = f"Resumed off-network check-in (IP: {ip_address or 'Unknown'}, {gps_desc}). Awaiting Admin Approval."
                 combined_note = (

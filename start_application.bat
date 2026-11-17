@@ -28,7 +28,7 @@ echo    - Backend API Docs:   http://localhost:8000/docs
 echo =====================================================================
 echo.
 echo Starting Backend (FastAPI on 0.0.0.0:8000)...
-start "Hierarchy Backend (0.0.0.0:8000)" cmd /k "cd /d %~dp0backend && venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+start "Hierarchy Backend (0.0.0.0:8000)" cmd /k "cd /d %~dp0backend && (if exist littad-env\Scripts\python.exe (littad-env\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload) else (python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload))"
 
 echo Starting Frontend (Next.js on 0.0.0.0:3000)...
 start "Hierarchy Frontend (0.0.0.0:3000)" cmd /k "cd /d %~dp0frontend && npm run dev"

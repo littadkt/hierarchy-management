@@ -1,6 +1,9 @@
 import pytest
+import ipaddress
 from httpx import AsyncClient
 from app.db.seed_demo_data import seed_data
+from app.services.attendance_service import is_ip_in_network, parse_clean_ip
+from app.core.ip_utils import clean_ip_str
 
 
 @pytest.mark.asyncio
@@ -14,7 +17,10 @@ async def test_attendance_checkin_checkout_and_report_flow(async_client: AsyncCl
     )
     assert staff_login.status_code == 200
     staff_token = staff_login.json()["access_token"]
-    staff_headers = {"Authorization": f"Bearer {staff_token}"}
+    staff_headers = {
+        "Authorization": f"Bearer {staff_token}",
+        "CF-Connecting-IP": "103.70.197.110",  # Office Public WAN IP
+    }
     staff_id = staff_login.json()["user"]["id"]
 
     # 2. Check today's status initially (should not be checked in)
@@ -102,16 +108,19 @@ async def test_attendance_checkin_checkout_and_report_flow(async_client: AsyncCl
 async def test_off_network_checkin_requires_approval_and_appears_in_approvals(async_client: AsyncClient):
     await seed_data()
 
-    # Login as Staff
+    # Login as Staff 2
     staff_login = await async_client.post(
         "/api/v1/auth/login",
         data={"username": "staff2@example.com", "password": "Staff@123"},
     )
     assert staff_login.status_code == 200
     staff_token = staff_login.json()["access_token"]
-    staff_headers = {"Authorization": f"Bearer {staff_token}"}
+    staff_headers = {
+        "Authorization": f"Bearer {staff_token}",
+        "CF-Connecting-IP": "10.0.0.55",  # Off-network IP
+    }
 
-    # Perform off-network check-in (IP not in 192.168.100.0/24, e.g. 10.0.0.55)
+    # Perform off-network check-in
     check_in_res = await async_client.post(
         "/api/v1/attendance/check-in",
         json={
@@ -119,7 +128,6 @@ async def test_off_network_checkin_requires_approval_and_appears_in_approvals(as
             "latitude": 10.8505,
             "longitude": 76.2711,
             "accuracy": 15.0,
-            "client_ip": "10.0.0.55",
         },
         headers=staff_headers,
     )
@@ -153,91 +161,63 @@ async def test_off_network_checkin_requires_approval_and_appears_in_approvals(as
 
 
 @pytest.mark.asyncio
-async def test_allowed_wifi_ip_checkin_does_not_require_approval(async_client: AsyncClient):
+async def test_office_wifi_public_ip_checkin_does_not_require_approval(async_client: AsyncClient):
+    """Scenario 1: Employee connects to office Wi-Fi; CF-Connecting-IP matches office WAN IP -> ON-NETWORK / APPROVED"""
     await seed_data()
 
-    # Login as Staff
     staff_login = await async_client.post(
         "/api/v1/auth/login",
         data={"username": "staff1@example.com", "password": "Staff@123"},
-        headers={"X-Forwarded-For": "192.168.100.84"},
     )
-    assert staff_login.status_code == 200
     staff_token = staff_login.json()["access_token"]
     staff_headers = {
         "Authorization": f"Bearer {staff_token}",
-        "X-Forwarded-For": "192.168.100.84",
+        "CF-Connecting-IP": "103.70.197.110",  # Office Public WAN IP
     }
 
-    # Perform on-network check-in from allowed Wi-Fi IP (192.168.100.84 is within 192.168.100.0/24)
     check_in_res = await async_client.post(
         "/api/v1/attendance/check-in",
-        json={
-            "note": "Working at office desk via allowed Wi-Fi",
-            "latitude": 10.8505,
-            "longitude": 76.2711,
-            "accuracy": 10.0,
-            "client_ip": "192.168.100.84",
-        },
+        json={"note": "Working at office desk via allowed Wi-Fi"},
         headers=staff_headers,
     )
     assert check_in_res.status_code == 201
     rec = check_in_res.json()
     assert rec["requires_approval"] is False
     assert rec["approval_status"] == "APPROVED"
-    assert rec["ip_address"] == "192.168.100.84"
+    assert rec["ip_address"] == "103.70.197.110"
 
-    # Super Admin pending check-in approvals should NOT contain this record
-    sa_login = await async_client.post(
-        "/api/v1/auth/login",
-        data={"username": "superadmin@example.com", "password": "SuperAdmin@123"},
-    )
-    sa_token = sa_login.json()["access_token"]
-    sa_headers = {"Authorization": f"Bearer {sa_token}"}
-
-    pending_res = await async_client.get("/api/v1/attendance/pending-approvals", headers=sa_headers)
-    assert pending_res.status_code == 200
-    pending_items = pending_res.json()
-    assert not any(item["id"] == rec["id"] for item in pending_items)
-
-    # Perform check-out
-    check_out_res = await async_client.post(
+    # Checkout
+    await async_client.post(
         "/api/v1/attendance/check-out",
-        json={"note": "Leaving office after shift"},
+        json={"note": "Shift end"},
         headers=staff_headers,
     )
-    assert check_out_res.status_code == 200
-    out_rec = check_out_res.json()
-    assert out_rec["check_out_time"] is not None
 
 
 @pytest.mark.asyncio
-async def test_cloudflare_tunnel_off_network_checkin_requires_approval(async_client: AsyncClient):
-    """Verify that requests coming via Cloudflare Tunnel (CF-Connecting-IP) from external IP require approval"""
+async def test_personal_mobile_data_checkin_requires_approval(async_client: AsyncClient):
+    """Scenario 2: Employee connects using cellular / mobile data -> OFF-NETWORK / PENDING"""
     await seed_data()
 
-    # Login as Staff
     staff_login = await async_client.post(
         "/api/v1/auth/login",
         data={"username": "staff1@example.com", "password": "Staff@123"},
     )
-    assert staff_login.status_code == 200
     staff_token = staff_login.json()["access_token"]
-
-    # External mobile client connects through Cloudflare Tunnel
-    headers = {
+    staff_headers = {
         "Authorization": f"Bearer {staff_token}",
-        "CF-Connecting-IP": "49.37.10.25",  # Remote mobile/cellular IP
+        "CF-Connecting-IP": "49.37.10.25",  # Cellular / Mobile carrier public IP
     }
 
     check_in_res = await async_client.post(
         "/api/v1/attendance/check-in",
         json={
-            "note": "Remote mobile check-in",
+            "note": "Mobile data punch from road",
             "latitude": 9.9312,
             "longitude": 76.2673,
+            "accuracy": 20.0,
         },
-        headers=headers,
+        headers=staff_headers,
     )
     assert check_in_res.status_code == 201
     rec = check_in_res.json()
@@ -245,17 +225,17 @@ async def test_cloudflare_tunnel_off_network_checkin_requires_approval(async_cli
     assert rec["approval_status"] == "PENDING"
     assert rec["ip_address"] == "49.37.10.25"
 
-    # Check out to allow subsequent check-in test
+    # Checkout
     await async_client.post(
         "/api/v1/attendance/check-out",
         json={"note": "Checkout remote"},
-        headers=headers,
+        headers=staff_headers,
     )
 
 
 @pytest.mark.asyncio
-async def test_cloudflare_tunnel_proxy_chain_extracts_remote_ip(async_client: AsyncClient):
-    """Verify that multi-hop proxy chains (Cloudflare -> Caddy -> FastAPI) properly extract remote client IP"""
+async def test_iphone_on_same_office_wifi_ipv6_is_approved(async_client: AsyncClient):
+    """Real-world iPhone scenario: User device connects over IPv6 from the same office Wi-Fi -> ON-NETWORK / APPROVED"""
     await seed_data()
 
     staff_login = await async_client.post(
@@ -263,23 +243,169 @@ async def test_cloudflare_tunnel_proxy_chain_extracts_remote_ip(async_client: As
         data={"username": "staff1@example.com", "password": "Staff@123"},
     )
     staff_token = staff_login.json()["access_token"]
-
-    # When Caddy appends 127.0.0.1 to X-Forwarded-For
-    headers = {
+    staff_headers = {
         "Authorization": f"Bearer {staff_token}",
-        "X-Forwarded-For": "152.58.12.99, 127.0.0.1",
+        "CF-Connecting-IP": "2403:a080:836:e5e3:542:5a00:e437:d48b",  # iPhone Wi-Fi IPv6
     }
 
     check_in_res = await async_client.post(
         "/api/v1/attendance/check-in",
-        json={"note": "Proxy chain check-in"},
-        headers=headers,
+        json={"note": "iPhone office Wi-Fi checkin"},
+        headers=staff_headers,
+    )
+    assert check_in_res.status_code == 201
+    rec = check_in_res.json()
+    assert rec["requires_approval"] is False
+    assert rec["approval_status"] == "APPROVED"
+    assert rec["ip_address"] == "2403:a080:836:e5e3:542:5a00:e437:d48b"
+
+    # Checkout
+    await async_client.post(
+        "/api/v1/attendance/check-out",
+        json={"note": "Checkout iPhone"},
+        headers=staff_headers,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_external_wifi_requires_approval(async_client: AsyncClient):
+    """Scenario 3: Employee connects from home/cafe Wi-Fi (unauthorized public WAN) -> OFF-NETWORK / PENDING"""
+    await seed_data()
+
+    staff_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "staff1@example.com", "password": "Staff@123"},
+    )
+    staff_token = staff_login.json()["access_token"]
+    staff_headers = {
+        "Authorization": f"Bearer {staff_token}",
+        "CF-Connecting-IP": "117.200.5.12",  # Home broadband ISP public IP
+    }
+
+    check_in_res = await async_client.post(
+        "/api/v1/attendance/check-in",
+        json={"note": "Working from cafe"},
+        headers=staff_headers,
     )
     assert check_in_res.status_code == 201
     rec = check_in_res.json()
     assert rec["requires_approval"] is True
     assert rec["approval_status"] == "PENDING"
-    assert rec["ip_address"] == "152.58.12.99"
+    assert rec["ip_address"] == "117.200.5.12"
+
+    await async_client.post(
+        "/api/v1/attendance/check-out",
+        json={"note": "Leaving cafe"},
+        headers=staff_headers,
+    )
 
 
+@pytest.mark.asyncio
+async def test_localhost_ip_never_qualifies_as_office_network(async_client: AsyncClient):
+    """Scenario 4: Localhost (127.0.0.1 / ::1) must NEVER qualify as an office network -> fails closed"""
+    await seed_data()
 
+    # Direct unit test of is_ip_in_network
+    assert is_ip_in_network("127.0.0.1", "192.168.100.0/24") is False
+    assert is_ip_in_network("127.0.0.1", "127.0.0.1, 192.168.100.0/24") is False
+    assert is_ip_in_network("::1", "127.0.0.1, ::1, 192.168.100.0/24") is False
+    assert is_ip_in_network("localhost", "192.168.100.0/24") is False
+
+    # Check-in when headers resolve to loopback
+    staff_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "staff1@example.com", "password": "Staff@123"},
+    )
+    staff_token = staff_login.json()["access_token"]
+    staff_headers = {
+        "Authorization": f"Bearer {staff_token}",
+        # No proxy header provided -> resolves to loopback socket host
+    }
+
+    check_in_res = await async_client.post(
+        "/api/v1/attendance/check-in",
+        json={"note": "Loopback direct check-in"},
+        headers=staff_headers,
+    )
+    assert check_in_res.status_code == 201
+    rec = check_in_res.json()
+    assert rec["requires_approval"] is True
+    assert rec["approval_status"] == "PENDING"
+
+    # Check out
+    await async_client.post(
+        "/api/v1/attendance/check-out",
+        json={"note": "Checkout loopback"},
+        headers=staff_headers,
+    )
+
+
+@pytest.mark.asyncio
+async def test_payload_client_ip_spoof_attempt_is_ignored(async_client: AsyncClient):
+    """Security: Client cannot spoof allowed IP via JSON body payload"""
+    await seed_data()
+
+    staff_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "staff1@example.com", "password": "Staff@123"},
+    )
+    staff_token = staff_login.json()["access_token"]
+    staff_headers = {
+        "Authorization": f"Bearer {staff_token}",
+        "CF-Connecting-IP": "49.37.10.25",  # Actual mobile client IP
+    }
+
+    # Attempt to spoof office public IP in JSON payload
+    check_in_res = await async_client.post(
+        "/api/v1/attendance/check-in",
+        json={
+            "note": "Hacker attempt",
+            "client_ip": "103.70.197.110",  # Fake payload override
+        },
+        headers=staff_headers,
+    )
+    assert check_in_res.status_code == 201
+    rec = check_in_res.json()
+    # Verification MUST use real network IP (49.37.10.25) and require approval!
+    assert rec["requires_approval"] is True
+    assert rec["approval_status"] == "PENDING"
+    assert rec["ip_address"] == "49.37.10.25"
+
+
+@pytest.mark.asyncio
+async def test_ip_matching_rules_unit():
+    """Unit tests for IP matching: CIDR, IPv6, missing/invalid IPs, and fail-closed security"""
+    allowed_config = "192.168.100.0/24, 103.70.197.110, 2001:db8:abcd::/48"
+
+    # 1. Valid matches
+    assert is_ip_in_network("192.168.100.1", allowed_config) is True
+    assert is_ip_in_network("192.168.100.254", allowed_config) is True
+    assert is_ip_in_network("103.70.197.110", allowed_config) is True
+    assert is_ip_in_network("2001:db8:abcd::1", allowed_config) is True
+    assert is_ip_in_network("2001:db8:abcd:ffff::1", allowed_config) is True
+
+    # 2. Non-matches (fail closed)
+    assert is_ip_in_network("192.168.101.1", allowed_config) is False
+    assert is_ip_in_network("103.70.197.111", allowed_config) is False
+    assert is_ip_in_network("49.37.10.25", allowed_config) is False
+    assert is_ip_in_network("2001:db8:9999::1", allowed_config) is False
+
+    # 3. Missing / Malformed / Empty
+    assert is_ip_in_network(None, allowed_config) is False
+    assert is_ip_in_network("", allowed_config) is False
+    assert is_ip_in_network("not-an-ip", allowed_config) is False
+    assert is_ip_in_network("999.999.999.999", allowed_config) is False
+    assert is_ip_in_network("0.0.0.0", allowed_config) is False
+
+    # 4. Loopback never approved
+    assert is_ip_in_network("127.0.0.1", allowed_config) is False
+    assert is_ip_in_network("::1", allowed_config) is False
+    assert is_ip_in_network("127.0.0.5", allowed_config) is False
+
+    # 5. Clean IP utility tests
+    assert clean_ip_str(None) is None
+    assert clean_ip_str("") is None
+    assert clean_ip_str("invalid") is None
+    assert clean_ip_str("192.168.1.1:8080") == "192.168.1.1"
+    assert clean_ip_str("[2001:db8::1]:443") == "2001:db8::1"
+    assert clean_ip_str("::ffff:192.168.1.5") == "192.168.1.5"

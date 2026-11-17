@@ -3,7 +3,7 @@ import json
 import logging
 import time
 import urllib.request
-from typing import Optional
+from typing import Optional, Set
 from fastapi import Request
 
 logger = logging.getLogger(__name__)
@@ -13,11 +13,23 @@ _SERVER_PUBLIC_IP_CACHE: Optional[str] = None
 _SERVER_PUBLIC_IP_TIMESTAMP: float = 0.0
 _CACHE_TTL_SECONDS: float = 900.0  # 15 minutes
 
+# Trusted local reverse proxy addresses (Caddy and Cloudflare Tunnel loopback daemon)
+TRUSTED_PROXY_IPS: Set[str] = {
+    "127.0.0.1",
+    "::1",
+    "localhost",
+}
 
-def clean_ip_str(ip_str: Optional[str]) -> str:
-    """Normalize and clean an IP address string by stripping ports, brackets, and prefixes."""
+
+def clean_ip_str(ip_str: Optional[str]) -> Optional[str]:
+    """
+    Normalize, clean, and validate an IP address string.
+    Strips ports, brackets, and IPv4-mapped IPv6 prefixes (::ffff:).
+    Returns a validated IP string (IPv4 or IPv6), or None if missing/invalid.
+    Fails closed: NEVER defaults to localhost or a fallback IP.
+    """
     if not ip_str:
-        return "127.0.0.1"
+        return None
     clean = str(ip_str).strip()
     if clean.startswith("["):
         end_b = clean.find("]")
@@ -29,61 +41,108 @@ def clean_ip_str(ip_str: Optional[str]) -> str:
     if clean.lower().startswith("::ffff:") and "." in clean:
         clean = clean[7:].strip()
 
-    return clean or "127.0.0.1"
+    try:
+        parsed = ipaddress.ip_address(clean)
+        return str(parsed)
+    except (ValueError, TypeError):
+        return None
 
 
-def get_client_ip(request: Request, payload_ip: Optional[str] = None) -> str:
+def is_trusted_proxy(host: Optional[str]) -> bool:
+    """Check if the direct socket peer is one of the trusted local reverse proxies."""
+    if not host:
+        return False
+    clean = clean_ip_str(host)
+    if not clean:
+        return False
+    if clean in TRUSTED_PROXY_IPS:
+        return True
+    try:
+        ip = ipaddress.ip_address(clean)
+        return ip.is_loopback
+    except ValueError:
+        return False
+
+
+def get_client_ip(request: Request) -> Optional[str]:
     """
-    Extract the real client IP address handling reverse proxies and tunnels:
-    Employee Device -> Cloudflare -> Cloudflare Tunnel (cloudflared) -> Caddy -> FastAPI.
+    Securely extract the visitor's real IP address handling reverse proxies:
+    Employee Device -> Cloudflare Edge -> Cloudflare Tunnel (cloudflared) -> Caddy -> FastAPI.
 
-    Priority order:
-    1. payload_ip (explicit testing/remote override if provided in payload)
-    2. CF-Connecting-IP (canonical visitor IP set by Cloudflare Tunnel / CDN)
-    3. True-Client-IP (Cloudflare Enterprise / Akamai)
-    4. X-Forwarded-For (parses proxy chain, filters out internal loopback proxies)
-    5. X-Real-IP (reverse proxy header)
-    6. request.client.host (direct connection socket)
+    Security Rules:
+    1. Only trust proxy headers (CF-Connecting-IP, X-Forwarded-For, etc.) when the
+       immediate socket peer (request.client.host) is a verified trusted proxy (127.0.0.1, ::1).
+       If an untrusted network client connects directly to FastAPI, proxy headers are ignored
+       to prevent header spoofing attacks.
+    2. Frontend request bodies or payload parameters are NEVER accepted for IP detection.
+    3. Loopback addresses (127.0.0.1, ::1) are filtered out of the proxy chain to find
+       the actual external visitor IP.
+    4. If no valid remote IP is found, returns None (or socket host), failing closed.
     """
-    if payload_ip and payload_ip.strip():
-        return clean_ip_str(payload_ip.strip())
+    socket_host = request.client.host if request.client else None
+    cleaned_socket = clean_ip_str(socket_host)
 
-    # 1. Cloudflare header (highest priority when behind Cloudflare / Cloudflare Tunnel)
+    # If the connection does not originate from our trusted local reverse proxy,
+    # strictly use the direct connection socket host. DO NOT trust forwarded headers!
+    if not is_trusted_proxy(cleaned_socket):
+        return cleaned_socket
+
+    # Request is from trusted proxy (Caddy/Cloudflare Tunnel on localhost).
+    # Inspect proxy headers in priority order:
+
+    # 1. CF-Connecting-IP (authoritative visitor IP injected by Cloudflare Edge)
     cf_connecting = request.headers.get("cf-connecting-ip")
     if cf_connecting and cf_connecting.strip():
-        return clean_ip_str(cf_connecting)
+        clean_cf = clean_ip_str(cf_connecting)
+        if clean_cf:
+            try:
+                ip_obj = ipaddress.ip_address(clean_cf)
+                if not ip_obj.is_loopback:
+                    return clean_cf
+            except ValueError:
+                pass
 
+    # 2. True-Client-IP (Cloudflare Enterprise / Akamai)
     true_client = request.headers.get("true-client-ip")
     if true_client and true_client.strip():
-        return clean_ip_str(true_client)
+        clean_tc = clean_ip_str(true_client)
+        if clean_tc:
+            try:
+                ip_obj = ipaddress.ip_address(clean_tc)
+                if not ip_obj.is_loopback:
+                    return clean_tc
+            except ValueError:
+                pass
 
-    # 2. X-Forwarded-For header
+    # 3. X-Forwarded-For (traversed from left to right; filter out loopback proxies)
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded and forwarded.strip():
         parts = [p.strip() for p in forwarded.split(",") if p.strip()]
-        # If proxy appended/prepended localhost (127.0.0.1, ::1), prefer actual remote IP
-        remote_candidates = [
-            clean_ip_str(p)
-            for p in parts
-            if clean_ip_str(p) not in ("127.0.0.1", "::1", "localhost")
-        ]
-        if remote_candidates:
-            return remote_candidates[0]
-        if parts:
-            return clean_ip_str(parts[0])
+        for part in parts:
+            clean_part = clean_ip_str(part)
+            if clean_part:
+                try:
+                    ip_obj = ipaddress.ip_address(clean_part)
+                    if not ip_obj.is_loopback:
+                        return clean_part
+                except ValueError:
+                    continue
 
-    # 3. X-Real-IP header
+    # 4. X-Real-IP
     real_ip = request.headers.get("x-real-ip")
     if real_ip and real_ip.strip():
-        clean = clean_ip_str(real_ip)
-        if clean not in ("127.0.0.1", "::1", "localhost"):
-            return clean
+        clean_real = clean_ip_str(real_ip)
+        if clean_real:
+            try:
+                ip_obj = ipaddress.ip_address(clean_real)
+                if not ip_obj.is_loopback:
+                    return clean_real
+            except ValueError:
+                pass
 
-    # 4. Fallback to direct socket connection host
-    if request.client and request.client.host:
-        return clean_ip_str(request.client.host)
-
-    return "127.0.0.1"
+    # If all forwarded headers were absent or only loopback, return socket host (loopback)
+    # The attendance network verification module explicitly rejects loopback IPs.
+    return cleaned_socket
 
 
 def get_server_public_ip(force_refresh: bool = False) -> Optional[str]:
@@ -91,6 +150,7 @@ def get_server_public_ip(force_refresh: bool = False) -> Optional[str]:
     Retrieve server host machine's public WAN IP address with in-memory caching.
     Used when the server is physically located on the office network so employees
     connecting through the Cloudflare Tunnel domain share the host router's WAN IP.
+    Ensures that only genuine, non-private, non-loopback IPs are cached.
     """
     global _SERVER_PUBLIC_IP_CACHE, _SERVER_PUBLIC_IP_TIMESTAMP
     now = time.time()
@@ -113,12 +173,13 @@ def get_server_public_ip(force_refresh: bool = False) -> Optional[str]:
                 ip = data.get("ip") or data.get("ip_addr")
                 if ip:
                     clean = clean_ip_str(ip)
-                    # Validate it's a valid IP
-                    ipaddress.ip_address(clean)
-                    _SERVER_PUBLIC_IP_CACHE = clean
-                    _SERVER_PUBLIC_IP_TIMESTAMP = now
-                    logger.info(f"Resolved host public WAN IP: {clean}")
-                    return clean
+                    if clean:
+                        ip_obj = ipaddress.ip_address(clean)
+                        if not ip_obj.is_loopback and not ip_obj.is_private:
+                            _SERVER_PUBLIC_IP_CACHE = clean
+                            _SERVER_PUBLIC_IP_TIMESTAMP = now
+                            logger.info(f"Resolved host public WAN IP: {clean}")
+                            return clean
         except Exception:
             continue
 

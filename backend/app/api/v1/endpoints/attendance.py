@@ -57,7 +57,8 @@ async def check_in(
     session: AsyncSession = Depends(get_db),
 ) -> Any:
     """Record user check-in for today (with Wi-Fi restriction and GPS capture)"""
-    ip_addr = get_client_ip(request, payload.client_ip if payload else None)
+    # Securely extract client IP from connection/trusted proxy headers (ignoring any client-supplied payload overrides)
+    ip_addr = get_client_ip(request)
 
     note = payload.note if payload else None
     lat = payload.latitude if payload else None
