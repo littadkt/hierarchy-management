@@ -46,21 +46,7 @@ class MessageResponse(BaseModel):
     message: str
 
 
-def _get_client_ip(request: Request) -> str:
-    """Extract client IP handling reverse proxies on private networks"""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip()
-    elif request.headers.get("X-Real-IP"):
-        ip = request.headers.get("X-Real-IP").strip()
-    else:
-        ip = request.client.host if request.client else "127.0.0.1"
-
-    if ip and ip.startswith("::ffff:"):
-        ip = ip[7:].strip()
-    if ip and ip.count(":") == 1 and "." in ip:
-        ip = ip.split(":")[0].strip()
-    return ip or "127.0.0.1"
+from app.core.ip_utils import get_client_ip as _get_client_ip
 
 
 def log_auth_login(

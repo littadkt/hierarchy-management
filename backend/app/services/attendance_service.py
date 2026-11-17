@@ -83,6 +83,8 @@ def is_ip_in_network(client_ip: Optional[str], allowed_str: Optional[str]) -> bo
     Correctly handles IPv4, IPv6, ports, brackets, and IPv4-mapped IPv6 (::ffff:x.x.x.x).
     Also recognizes when client is accessing locally (127.0.0.1/::1/localhost) from a host
     machine whose physical network adapter IP is within the allowed network.
+    Also recognizes when client is connecting through Cloudflare from the same office Wi-Fi
+    router that hosts the server (matching server public WAN IP).
     """
     if not client_ip or not allowed_str:
         return False
@@ -114,11 +116,29 @@ def is_ip_in_network(client_ip: Optional[str], allowed_str: Optional[str]) -> bo
                 continue
         return False
 
-    # 1. Direct match check
+    # 1. Direct match check against configured allowed IPs/subnets
     if _matches_ip_obj(c_ip, allowed_str):
         return True
 
-    # 2. Loopback / Localhost check against server host LAN IP
+    # 2. Host Public WAN IP match
+    # If the server host machine is located in the office on the allowed LAN subnet,
+    # and employees access via the Cloudflare Tunnel public domain, their CF-Connecting-IP
+    # will be the office router's public WAN IP.
+    try:
+        from app.core.ip_utils import get_server_public_ip
+        server_wan_ip = get_server_public_ip()
+        if server_wan_ip:
+            parsed_wan = parse_clean_ip(server_wan_ip)
+            if parsed_wan and c_ip == parsed_wan:
+                # Ensure the server itself is situated on an allowed LAN network
+                for host_lan_ip in get_host_lan_ips():
+                    parsed_lan = parse_clean_ip(host_lan_ip)
+                    if parsed_lan and _matches_ip_obj(parsed_lan, allowed_str):
+                        return True
+    except Exception as ex:
+        logger.debug(f"Failed host WAN IP check: {ex}")
+
+    # 3. Loopback / Localhost check against server host LAN IP
     if c_ip.is_loopback:
         for host_lan_ip in get_host_lan_ips():
             parsed_lan = parse_clean_ip(host_lan_ip)
@@ -136,14 +156,21 @@ def log_attendance_event(
 ) -> None:
     """Print high-visibility console log and logger.info for attendance events."""
     host_lan_ips = get_host_lan_ips()
+    try:
+        from app.core.ip_utils import get_server_public_ip
+        host_wan_ip = get_server_public_ip()
+    except Exception:
+        host_wan_ip = None
+
     now_str = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
     role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
+    wan_display = f" | Server Public WAN IP: {host_wan_ip}" if host_wan_ip else ""
     banner = [
         "=" * 80,
         f"📍 [{event_type}] {now_str}",
         f"   User: '{user.full_name}' ({user.email}) | Role: {role_str}",
         f"   Branch: {user.branch or 'General'} | Department: {user.department or 'General'}",
-        f"   Client IP: {ip_address or 'Unknown'} | Server Host LAN IP(s): {host_lan_ips}",
+        f"   Client IP: {ip_address or 'Unknown'} | Server Host LAN IP(s): {host_lan_ips}{wan_display}",
     ]
     for k, v in details.items():
         banner.append(f"   {k}: {v}")
@@ -324,17 +351,19 @@ class AttendanceService:
                 record.approval_status = "PENDING"
                 gps_desc = f"GPS: ({latitude:.5f}, {longitude:.5f})" if latitude and longitude else "GPS unavailable"
                 resumed_note = f"Resumed off-network check-in (IP: {ip_address or 'Unknown'}, {gps_desc}). Awaiting Admin Approval."
-                record.check_in_note = (
+                combined_note = (
                     f"{record.check_in_note} | {resumed_note}"
                     if record.check_in_note
                     else resumed_note
                 )
+                record.check_in_note = combined_note[-250:] if len(combined_note) > 250 else combined_note
             elif note:
-                record.check_in_note = (
+                combined_note = (
                     f"{record.check_in_note} | Resumed: {note.strip()}"
                     if record.check_in_note
                     else note.strip()
                 )
+                record.check_in_note = combined_note[-250:] if len(combined_note) > 250 else combined_note
             if latitude is not None:
                 record.latitude = latitude
             if longitude is not None:
@@ -429,6 +458,10 @@ class AttendanceService:
                 gps_desc = f"GPS: ({latitude:.5f}, {longitude:.5f})" if latitude and longitude else "GPS unavailable"
                 check_note_parts.append(f"Off-network check-in (IP: {ip_address or 'Unknown'}, {gps_desc}). Awaiting Admin Approval.")
 
+            final_note = " | ".join(check_note_parts) if check_note_parts else None
+            if final_note and len(final_note) > 250:
+                final_note = final_note[:250]
+
             record = Attendance(
                 user_id=user.id,
                 date=today,
@@ -441,7 +474,7 @@ class AttendanceService:
                 is_buffer_used=is_buffer_used,
                 is_late=is_late,
                 late_minutes=late_minutes,
-                check_in_note=" | ".join(check_note_parts) if check_note_parts else None,
+                check_in_note=final_note,
                 ip_address=ip_address,
                 approval_status=approval_status,
                 requires_approval=requires_approval,

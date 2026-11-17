@@ -386,13 +386,13 @@ class PurchaseService:
             )
 
             if current_user.department or current_user.branch:
-                pm_filter = (User.role == Role.TEAM_LEADER)
+                incharge_pm_filter = (User.role == Role.TEAM_LEADER)
                 if current_user.department:
-                    pm_filter = pm_filter & (User.department == current_user.department)
+                    incharge_pm_filter = incharge_pm_filter & (User.department == current_user.department)
                 if current_user.branch:
-                    pm_filter = pm_filter & (User.branch == current_user.branch)
+                    incharge_pm_filter = incharge_pm_filter & (User.branch == current_user.branch)
                 conditions.append(
-                    PurchaseRequest.purchase_manager.has(pm_filter)
+                    PurchaseRequest.purchase_manager.has(incharge_pm_filter)
                     & PurchaseRequest.requested_by.has(User.role == Role.STAFF)
                 )
 

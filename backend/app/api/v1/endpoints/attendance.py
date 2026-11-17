@@ -46,24 +46,7 @@ async def get_buffer_status(
     return await AttendanceService.get_user_buffer_status(session, target_user)
 
 
-def get_client_ip(request: Request, payload_ip: Optional[str] = None) -> str:
-    """Extract client IP handling reverse proxies on private networks and payload override."""
-    if payload_ip and payload_ip.strip():
-        ip = payload_ip.strip()
-    else:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            ip = forwarded.split(",")[0].strip()
-        elif request.headers.get("X-Real-IP"):
-            ip = request.headers.get("X-Real-IP").strip()
-        else:
-            ip = request.client.host if request.client else "127.0.0.1"
-
-    if ip and ip.startswith("::ffff:"):
-        ip = ip[7:].strip()
-    if ip and ip.count(":") == 1 and "." in ip:
-        ip = ip.split(":")[0].strip()
-    return ip or "127.0.0.1"
+from app.core.ip_utils import get_client_ip
 
 
 @router.post("/check-in", response_model=AttendanceOut, status_code=status.HTTP_201_CREATED)

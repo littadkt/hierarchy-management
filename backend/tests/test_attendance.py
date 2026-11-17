@@ -211,3 +211,75 @@ async def test_allowed_wifi_ip_checkin_does_not_require_approval(async_client: A
     assert out_rec["check_out_time"] is not None
 
 
+@pytest.mark.asyncio
+async def test_cloudflare_tunnel_off_network_checkin_requires_approval(async_client: AsyncClient):
+    """Verify that requests coming via Cloudflare Tunnel (CF-Connecting-IP) from external IP require approval"""
+    await seed_data()
+
+    # Login as Staff
+    staff_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "staff1@example.com", "password": "Staff@123"},
+    )
+    assert staff_login.status_code == 200
+    staff_token = staff_login.json()["access_token"]
+
+    # External mobile client connects through Cloudflare Tunnel
+    headers = {
+        "Authorization": f"Bearer {staff_token}",
+        "CF-Connecting-IP": "49.37.10.25",  # Remote mobile/cellular IP
+    }
+
+    check_in_res = await async_client.post(
+        "/api/v1/attendance/check-in",
+        json={
+            "note": "Remote mobile check-in",
+            "latitude": 9.9312,
+            "longitude": 76.2673,
+        },
+        headers=headers,
+    )
+    assert check_in_res.status_code == 201
+    rec = check_in_res.json()
+    assert rec["requires_approval"] is True
+    assert rec["approval_status"] == "PENDING"
+    assert rec["ip_address"] == "49.37.10.25"
+
+    # Check out to allow subsequent check-in test
+    await async_client.post(
+        "/api/v1/attendance/check-out",
+        json={"note": "Checkout remote"},
+        headers=headers,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_tunnel_proxy_chain_extracts_remote_ip(async_client: AsyncClient):
+    """Verify that multi-hop proxy chains (Cloudflare -> Caddy -> FastAPI) properly extract remote client IP"""
+    await seed_data()
+
+    staff_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "staff1@example.com", "password": "Staff@123"},
+    )
+    staff_token = staff_login.json()["access_token"]
+
+    # When Caddy appends 127.0.0.1 to X-Forwarded-For
+    headers = {
+        "Authorization": f"Bearer {staff_token}",
+        "X-Forwarded-For": "152.58.12.99, 127.0.0.1",
+    }
+
+    check_in_res = await async_client.post(
+        "/api/v1/attendance/check-in",
+        json={"note": "Proxy chain check-in"},
+        headers=headers,
+    )
+    assert check_in_res.status_code == 201
+    rec = check_in_res.json()
+    assert rec["requires_approval"] is True
+    assert rec["approval_status"] == "PENDING"
+    assert rec["ip_address"] == "152.58.12.99"
+
+
+
