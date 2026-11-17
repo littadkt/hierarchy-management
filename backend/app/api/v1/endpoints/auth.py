@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import logging
-from typing import Any
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
@@ -50,8 +50,49 @@ def _get_client_ip(request: Request) -> str:
     """Extract client IP handling reverse proxies on private networks"""
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "127.0.0.1"
+        ip = forwarded.split(",")[0].strip()
+    elif request.headers.get("X-Real-IP"):
+        ip = request.headers.get("X-Real-IP").strip()
+    else:
+        ip = request.client.host if request.client else "127.0.0.1"
+
+    if ip and ip.startswith("::ffff:"):
+        ip = ip[7:].strip()
+    if ip and ip.count(":") == 1 and "." in ip:
+        ip = ip.split(":")[0].strip()
+    return ip or "127.0.0.1"
+
+
+def log_auth_login(
+    user: User,
+    client_ip: str,
+    user_agent: Optional[str] = None,
+    login_type: str = "JSON",
+) -> None:
+    """Print high-visibility console log and logger.info for user logins."""
+    from app.services.attendance_service import get_host_lan_ips, is_ip_in_network
+    from app.core.config import settings
+
+    host_lan_ips = get_host_lan_ips()
+    now_str = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    is_on_net = is_ip_in_network(client_ip, settings.ALLOWED_WIFI_IPS)
+    net_status = "ON-NETWORK (Allowed Office Wi-Fi)" if is_on_net else "OFF-NETWORK (Remote / External IP)"
+    role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
+
+    banner = [
+        "=" * 80,
+        f"🔑 [AUTH LOGIN ({login_type})] {now_str}",
+        f"   User: '{user.full_name}' ({user.email}) | Role: {role_str}",
+        f"   Branch: {user.branch or 'General'} | Department: {user.department or 'General'}",
+        f"   Client IP: {client_ip} | Server Host LAN IP(s): {host_lan_ips}",
+        f"   Allowed Wi-Fi IPs: {settings.ALLOWED_WIFI_IPS}",
+        f"   Network Status: {net_status}",
+        f"   User-Agent: {user_agent or 'Unknown'}",
+        "=" * 80,
+    ]
+    banner_str = "\n".join(banner)
+    print(banner_str, flush=True)
+    logger.info(banner_str)
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -124,6 +165,12 @@ async def login_access_token(
     )
 
     logger.info(f"User '{user.email}' logged in successfully from IP {client_ip}")
+    log_auth_login(
+        user=user,
+        client_ip=client_ip,
+        user_agent=request.headers.get("User-Agent"),
+        login_type="OAuth2",
+    )
 
     user.permissions = PermissionService.get_user_permissions(user)
 
@@ -204,6 +251,12 @@ async def login_json(
     )
 
     logger.info(f"User '{user.email}' logged in successfully via JSON from IP {client_ip}")
+    log_auth_login(
+        user=user,
+        client_ip=client_ip,
+        user_agent=request.headers.get("User-Agent"),
+        login_type="JSON",
+    )
 
     user.permissions = PermissionService.get_user_permissions(user)
 

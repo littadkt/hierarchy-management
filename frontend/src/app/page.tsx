@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import {
   CheckSquare,
@@ -52,6 +52,7 @@ export default function DashboardPage() {
   const [isDownloadReportsOpen, setIsDownloadReportsOpen] = useState(false);
 
   const isDefaultAdmin = user?.email === "superadmin@example.com";
+  const dashboardDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const loadDashboardData = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -134,7 +135,13 @@ export default function DashboardPage() {
           };
         });
       }
-      loadDashboardData(true);
+
+      if (dashboardDebounceRef.current) {
+        clearTimeout(dashboardDebounceRef.current);
+      }
+      dashboardDebounceRef.current = setTimeout(() => {
+        loadDashboardData(true);
+      }, 350);
     }
   );
 

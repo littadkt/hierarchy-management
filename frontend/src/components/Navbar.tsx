@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
 import {
   Menu,
@@ -28,7 +28,9 @@ export const Navbar: React.FC = () => {
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
-  const refreshPendingCount = () => {
+  const pendingCountDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  const fetchPendingCount = useCallback(() => {
     if (user && user.role !== "STAFF") {
       Promise.all([
         approvalsApi.getPending().catch(() => []),
@@ -39,11 +41,25 @@ export const Navbar: React.FC = () => {
     } else {
       setPendingCount(0);
     }
-  };
+  }, [user]);
+
+  const refreshPendingCount = useCallback(() => {
+    if (pendingCountDebounceRef.current) {
+      clearTimeout(pendingCountDebounceRef.current);
+    }
+    pendingCountDebounceRef.current = setTimeout(() => {
+      fetchPendingCount();
+    }, 300);
+  }, [fetchPendingCount]);
 
   useEffect(() => {
-    refreshPendingCount();
-  }, [user]);
+    fetchPendingCount();
+    return () => {
+      if (pendingCountDebounceRef.current) {
+        clearTimeout(pendingCountDebounceRef.current);
+      }
+    };
+  }, [fetchPendingCount]);
 
   useRealtimeEvent(
     [
@@ -52,7 +68,6 @@ export const Navbar: React.FC = () => {
       "TASK_CREATED",
       "TASK_DELETED",
       "CHECKIN_APPROVAL_REQUESTED",
-      "ATTENDANCE_UPDATED",
       "RESYNC",
     ],
     refreshPendingCount

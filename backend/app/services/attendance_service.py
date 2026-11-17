@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import io
 import ipaddress
 import logging
+import socket
 from typing import Any, List, Optional, Tuple, cast
 import uuid
 from fastapi import HTTPException, status
@@ -29,55 +30,127 @@ from app.schemas.schedule import BufferStatusOut
 logger = logging.getLogger(__name__)
 
 
+def get_host_lan_ips() -> List[str]:
+    """Retrieve host machine's active non-loopback network IPv4 addresses"""
+    lan_ips: List[str] = []
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith("127.") and ":" not in ip and ip not in lan_ips:
+                lan_ips.append(ip)
+    except Exception:
+        pass
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        routed = s.getsockname()[0]
+        s.close()
+        if routed and routed not in lan_ips and not routed.startswith("127."):
+            lan_ips.append(routed)
+    except Exception:
+        pass
+    return lan_ips
+
+
+def parse_clean_ip(ip_str: Optional[str]) -> Optional[Any]:
+    """Parse and clean an IP address, handling ports, brackets, and IPv4-mapped IPv6."""
+    if not ip_str:
+        return None
+    clean = str(ip_str).strip()
+    if clean.startswith("["):
+        end_b = clean.find("]")
+        if end_b != -1:
+            clean = clean[1:end_b].strip()
+    elif clean.count(":") == 1 and "." in clean:
+        clean = clean.split(":")[0].strip()
+
+    if clean.lower().startswith("::ffff:") and "." in clean:
+        clean = clean[7:].strip()
+
+    try:
+        parsed = ipaddress.ip_address(clean)
+        if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
+            parsed = parsed.ipv4_mapped
+        return parsed
+    except ValueError:
+        return None
+
+
 def is_ip_in_network(client_ip: Optional[str], allowed_str: Optional[str]) -> bool:
     """
     Check if client_ip matches any exact IP or CIDR block in allowed_str.
     allowed_str can be comma-, semicolon-, or newline-delimited.
-    Correctly handles IPv4, IPv6, and IPv4-mapped IPv6 (::ffff:x.x.x.x).
+    Correctly handles IPv4, IPv6, ports, brackets, and IPv4-mapped IPv6 (::ffff:x.x.x.x).
+    Also recognizes when client is accessing locally (127.0.0.1/::1/localhost) from a host
+    machine whose physical network adapter IP is within the allowed network.
     """
     if not client_ip or not allowed_str:
         return False
 
-    clean_ip_str = client_ip.strip()
-    if clean_ip_str.startswith("["):
-        end_bracket = clean_ip_str.find("]")
-        if end_bracket != -1:
-            clean_ip_str = clean_ip_str[1:end_bracket].strip()
-    elif clean_ip_str.count(":") == 1 and "." in clean_ip_str:
-        clean_ip_str = clean_ip_str.split(":")[0].strip()
-
-    if clean_ip_str.lower().startswith("::ffff:") and "." in clean_ip_str:
-        clean_ip_str = clean_ip_str[7:].strip()
-
-    try:
-        c_ip = ipaddress.ip_address(clean_ip_str)
-        if isinstance(c_ip, ipaddress.IPv6Address) and c_ip.ipv4_mapped:
-            c_ip = c_ip.ipv4_mapped
-    except ValueError:
+    c_ip = parse_clean_ip(client_ip)
+    if not c_ip:
         return False
 
-    entries = [e.strip() for e in allowed_str.replace(";", ",").replace("\n", ",").split(",") if e.strip()]
-    for entry in entries:
-        if entry == "*":
-            return True
-        try:
+    def _matches_ip_obj(target_ip: Any, allowed: str) -> bool:
+        entries = [e.strip() for e in allowed.replace(";", ",").replace("\n", ",").split(",") if e.strip()]
+        for entry in entries:
             clean_entry = entry.strip()
+            if clean_entry == "*":
+                return True
+            if clean_entry.lower() in ("localhost", "127.0.0.1", "::1") and target_ip.is_loopback:
+                return True
             if clean_entry.lower().startswith("::ffff:") and "." in clean_entry:
                 clean_entry = clean_entry[7:].strip()
+            try:
+                if "/" in clean_entry:
+                    net = ipaddress.ip_network(clean_entry, strict=False)
+                    if target_ip.version == net.version and target_ip in net:
+                        return True
+                else:
+                    entry_ip = parse_clean_ip(clean_entry)
+                    if entry_ip and target_ip == entry_ip:
+                        return True
+            except (ValueError, TypeError):
+                continue
+        return False
 
-            if "/" in clean_entry:
-                net = ipaddress.ip_network(clean_entry, strict=False)
-                if c_ip.version == net.version and c_ip in net:
-                    return True
-            else:
-                entry_ip = ipaddress.ip_address(clean_entry)
-                if isinstance(entry_ip, ipaddress.IPv6Address) and entry_ip.ipv4_mapped:
-                    entry_ip = entry_ip.ipv4_mapped
-                if c_ip == entry_ip:
-                    return True
-        except (ValueError, TypeError):
-            continue
+    # 1. Direct match check
+    if _matches_ip_obj(c_ip, allowed_str):
+        return True
+
+    # 2. Loopback / Localhost check against server host LAN IP
+    if c_ip.is_loopback:
+        for host_lan_ip in get_host_lan_ips():
+            parsed_lan = parse_clean_ip(host_lan_ip)
+            if parsed_lan and _matches_ip_obj(parsed_lan, allowed_str):
+                return True
+
     return False
+
+
+def log_attendance_event(
+    event_type: str,
+    user: User,
+    ip_address: Optional[str],
+    details: dict,
+) -> None:
+    """Print high-visibility console log and logger.info for attendance events."""
+    host_lan_ips = get_host_lan_ips()
+    now_str = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
+    banner = [
+        "=" * 80,
+        f"📍 [{event_type}] {now_str}",
+        f"   User: '{user.full_name}' ({user.email}) | Role: {role_str}",
+        f"   Branch: {user.branch or 'General'} | Department: {user.department or 'General'}",
+        f"   Client IP: {ip_address or 'Unknown'} | Server Host LAN IP(s): {host_lan_ips}",
+    ]
+    for k, v in details.items():
+        banner.append(f"   {k}: {v}")
+    banner.append("=" * 80)
+    banner_str = "\n".join(banner)
+    print(banner_str, flush=True)
+    logger.info(banner_str)
 
 
 class AttendanceService:
@@ -203,20 +276,18 @@ class AttendanceService:
         now_local = datetime.now().astimezone()
 
         # Check office Wi-Fi / network restriction (Branch level or global fallback from .env)
+        effective_allowed_ips = settings.ALLOWED_WIFI_IPS
+        effective_ssid = settings.ALLOWED_WIFI_SSID
+
         branch = None
-        branch_has_network_rules = False
         if user.branch:
             b_stmt = select(Branch).where(func.lower(Branch.name) == user.branch.strip().lower())
             branch = (await session.execute(b_stmt)).scalar_one_or_none()
-            if branch and (branch.allowed_wifi_ips or branch.wifi_ssid):
-                branch_has_network_rules = True
-
-        if branch_has_network_rules:
-            effective_allowed_ips = (branch.allowed_wifi_ips.strip() if branch and branch.allowed_wifi_ips and branch.allowed_wifi_ips.strip() else None) or settings.ALLOWED_WIFI_IPS
-            effective_ssid = (branch.wifi_ssid.strip() if branch and branch.wifi_ssid and branch.wifi_ssid.strip() else None) or settings.ALLOWED_WIFI_SSID
-        else:
-            effective_allowed_ips = settings.ALLOWED_WIFI_IPS
-            effective_ssid = settings.ALLOWED_WIFI_SSID
+            if branch:
+                if branch.allowed_wifi_ips and branch.allowed_wifi_ips.strip():
+                    effective_allowed_ips = branch.allowed_wifi_ips.strip()
+                if branch.wifi_ssid and branch.wifi_ssid.strip():
+                    effective_ssid = branch.wifi_ssid.strip()
 
         requires_approval = False
         approval_status = "APPROVED"
@@ -467,6 +538,32 @@ class AttendanceService:
             except Exception as ex:
                 logger.error(f"Failed to broadcast check-in approval request: {ex}")
 
+        # High-visibility console log showing detected IP and verification
+        gps_summary = (
+            f"Lat {latitude:.5f}, Lng {longitude:.5f} (Acc: {accuracy or 0:.1f}m)"
+            if latitude and longitude
+            else "Not Provided / Unavailable"
+        )
+        verification_text = (
+            "ON-NETWORK (APPROVED - No Approval Required)"
+            if not record.requires_approval
+            else "OFF-NETWORK (PENDING - Supervisor Approval Required)"
+        )
+        log_attendance_event(
+            event_type="ATTENDANCE CHECK-IN",
+            user=user,
+            ip_address=ip_address,
+            details={
+                "Allowed Wi-Fi IPs": effective_allowed_ips or "None",
+                "Allowed SSID": f"{effective_ssid or 'None'} (Client SSID: {wifi_ssid or 'None'})",
+                "Network Match": f"{not record.requires_approval} -> {verification_text}",
+                "GPS Location": gps_summary,
+                "Shift / Buffer Status": f"Status: {record.status.value} | Late: {record.is_late} | Buffer Used: {record.is_buffer_used}",
+                "Approval Status": record.approval_status,
+                "Check-In Note": record.check_in_note or "None",
+            },
+        )
+
         # Broadcast real-time event
         await broadcaster.broadcast(
             "ATTENDANCE_UPDATED",
@@ -490,6 +587,7 @@ class AttendanceService:
         session: AsyncSession,
         user: User,
         note: Optional[str] = None,
+        ip_address: Optional[str] = None,
     ) -> Attendance:
         today = AttendanceService.get_today_date_str()
         now_utc = datetime.now(timezone.utc)
@@ -532,6 +630,21 @@ class AttendanceService:
 
         await session.commit()
         await session.refresh(record)
+
+        # High-visibility console log showing detected IP and check-out
+        log_attendance_event(
+            event_type="ATTENDANCE CHECK-OUT",
+            user=user,
+            ip_address=ip_address,
+            details={
+                "Worked Hours": f"{record.total_hours:.2f} hrs",
+                "Final Shift Status": record.status.value,
+                "Check-In Time": record.check_in_time.strftime("%Y-%m-%d %H:%M:%S UTC") if record.check_in_time else "None",
+                "Check-Out Time": record.check_out_time.strftime("%Y-%m-%d %H:%M:%S UTC") if record.check_out_time else "None",
+                "Check-In Note": record.check_in_note or "None",
+                "Check-Out Note": record.check_out_note or "None",
+            },
+        )
 
         out_dt = record.check_out_time or now_utc
         # Broadcast real-time event

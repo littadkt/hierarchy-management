@@ -46,6 +46,26 @@ async def get_buffer_status(
     return await AttendanceService.get_user_buffer_status(session, target_user)
 
 
+def get_client_ip(request: Request, payload_ip: Optional[str] = None) -> str:
+    """Extract client IP handling reverse proxies on private networks and payload override."""
+    if payload_ip and payload_ip.strip():
+        ip = payload_ip.strip()
+    else:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            ip = forwarded.split(",")[0].strip()
+        elif request.headers.get("X-Real-IP"):
+            ip = request.headers.get("X-Real-IP").strip()
+        else:
+            ip = request.client.host if request.client else "127.0.0.1"
+
+    if ip and ip.startswith("::ffff:"):
+        ip = ip[7:].strip()
+    if ip and ip.count(":") == 1 and "." in ip:
+        ip = ip.split(":")[0].strip()
+    return ip or "127.0.0.1"
+
+
 @router.post("/check-in", response_model=AttendanceOut, status_code=status.HTTP_201_CREATED)
 async def check_in(
     request: Request,
@@ -54,22 +74,7 @@ async def check_in(
     session: AsyncSession = Depends(get_db),
 ) -> Any:
     """Record user check-in for today (with Wi-Fi restriction and GPS capture)"""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        ip_addr = forwarded.split(",")[0].strip()
-    elif request.headers.get("X-Real-IP"):
-        ip_addr = request.headers.get("X-Real-IP").strip()
-    else:
-        ip_addr = request.client.host if request.client else "127.0.0.1"
-
-    if ip_addr and ip_addr.startswith("::ffff:"):
-        ip_addr = ip_addr[7:].strip()
-
-    # Allow client_ip override from payload if provided (useful for local dev testing)
-    if payload and payload.client_ip and payload.client_ip.strip():
-        # If client connecting via localhost/loopback or client_ip explicitly provided
-        if ip_addr in ("127.0.0.1", "::1", "localhost") or not ip_addr:
-            ip_addr = payload.client_ip.strip()
+    ip_addr = get_client_ip(request, payload.client_ip if payload else None)
 
     note = payload.note if payload else None
     lat = payload.latitude if payload else None
@@ -123,16 +128,19 @@ async def reject_checkin(
 
 @router.post("/check-out", response_model=AttendanceOut)
 async def check_out(
+    request: Request,
     payload: Optional[CheckOutRequest] = None,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> Any:
     """Record user check-out for today and calculate worked hours"""
+    ip_addr = get_client_ip(request)
     note = payload.note if payload else None
     return await AttendanceService.check_out(
         session=session,
         user=current_user,
         note=note,
+        ip_address=ip_addr,
     )
 
 

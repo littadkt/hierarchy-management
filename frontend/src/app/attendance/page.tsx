@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   CalendarCheck2,
   Clock,
@@ -28,6 +28,9 @@ import {
   User as UserIcon,
   MapPin,
   ShieldAlert,
+  WifiOff,
+  ShieldCheck,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
@@ -133,6 +136,14 @@ export default function AttendancePage() {
   const [punchNote, setPunchNote] = useState("");
   const [isPunching, setIsPunching] = useState(false);
   const [punchMessage, setPunchMessage] = useState<{ type: "success" | "error" | "warning"; text: string } | null>(null);
+  const [showOffNetworkModal, setShowOffNetworkModal] = useState<{
+    isOpen: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
+    accuracy?: number | null;
+    ipAddress?: string | null;
+  } | null>(null);
+  const realtimeSyncDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   // Tabs
   const canViewReports =
@@ -342,14 +353,19 @@ export default function AttendancePage() {
     }
   }, [activeTab, canViewReports, fetchTeamReport]);
 
-  // Real-time synchronization
+  // Real-time synchronization (debounced to prevent duplicate bursts)
   useRealtimeEvent(["ATTENDANCE_UPDATED"], () => {
-    fetchTodayStatus();
-    if (activeTab === "my_history") {
-      fetchMyHistory();
-    } else if (activeTab === "team_report") {
-      fetchTeamReport();
+    if (realtimeSyncDebounceRef.current) {
+      clearTimeout(realtimeSyncDebounceRef.current);
     }
+    realtimeSyncDebounceRef.current = setTimeout(() => {
+      fetchTodayStatus();
+      if (activeTab === "my_history") {
+        fetchMyHistory();
+      } else if (activeTab === "team_report") {
+        fetchTeamReport();
+      }
+    }, 300);
   });
 
   // Check In Handler
@@ -365,7 +381,14 @@ export default function AttendancePage() {
         accuracy: coords.accuracy,
       });
       setPunchNote("");
-      if (res.approval_status === "PENDING") {
+      if (res.approval_status === "PENDING" || res.requires_approval) {
+        setShowOffNetworkModal({
+          isOpen: true,
+          latitude: res.latitude ?? coords.latitude,
+          longitude: res.longitude ?? coords.longitude,
+          accuracy: res.accuracy ?? coords.accuracy,
+          ipAddress: res.ip_address,
+        });
         setPunchMessage({
           type: "warning",
           text: "Check-in recorded! You checked in outside office Wi-Fi network; your session is active and your GPS location has been submitted to Admins for review.",
@@ -528,14 +551,22 @@ export default function AttendancePage() {
                   Today&apos;s Status
                 </span>
                 {todayStatus?.is_checked_in && !todayStatus?.is_checked_out ? (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Currently Checked In
-                  </span>
+                  todayStatus.record?.approval_status === "PENDING" ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-200 border border-amber-300 dark:border-amber-800">
+                      <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                      Off-Network (Pending Approval)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      Currently Checked In
+                    </span>
+                  )
                 ) : todayStatus?.is_checked_out ? (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                     <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500" />
                     Completed for Today
+                    {todayStatus.record?.approval_status === "PENDING" && " (Pending Approval)"}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
@@ -544,6 +575,21 @@ export default function AttendancePage() {
                   </span>
                 )}
               </div>
+
+              {/* Off-Network Check-in Alert Banner */}
+              {todayStatus?.record?.approval_status === "PENDING" && (
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800/80 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200 animate-in fade-in">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-amber-800 dark:text-amber-300">
+                      Off-Network Check-In Pending Higher-Level Approval
+                    </p>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-300/90 mt-0.5 leading-relaxed">
+                      You are checked in outside the authorized office network. Your GPS location has been captured and submitted for higher-level approval (Super Admin / Admin / In-Charge / Team Leader). Your work timer is active.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
                 <div className="bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-2xl border border-slate-200/60 dark:border-slate-800">
@@ -624,13 +670,13 @@ export default function AttendancePage() {
 
               {/* Off-Network Check-in Pending Approval Alert */}
               {todayStatus?.record?.approval_status === "PENDING" && (
-                <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-1.5">
-                  <div className="flex items-center gap-2 font-bold">
+                <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-1.5 animate-in fade-in">
+                  <div className="flex items-center gap-2 font-bold text-amber-800 dark:text-amber-300">
                     <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                    <span>Off-Network Check-In: Awaiting Admin Approval</span>
+                    <span>Off-Network Check-In: Awaiting Higher-Level Approval</span>
                   </div>
-                  <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90">
-                    You checked in outside the designated office Wi-Fi network. Your work session is actively recorded from your punch-in time; your GPS location has been submitted to Admins and Super Admins for review.
+                  <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
+                    You checked in outside the authorized office network. Your GPS location has been submitted to your supervisor / administrator for review. Your work session is actively recorded.
                   </p>
                   {todayStatus.record.latitude && todayStatus.record.longitude && (
                     <div className="flex items-center gap-2 pt-0.5 text-[11px]">
@@ -1430,6 +1476,96 @@ export default function AttendancePage() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Off-Network Check-In Alert Dialog */}
+        {showOffNetworkModal?.isOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+            <div className="bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/80 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200">
+              {/* Header */}
+              <div className="p-4 sm:p-5 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-b border-amber-200 dark:border-amber-800/60 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
+                    <WifiOff className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">
+                      Off-Network Check-In Recorded
+                    </h3>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 font-semibold">
+                      Submitted for Higher-Level Approval
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowOffNetworkModal(null)}
+                  className="p-1.5 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="p-4 sm:p-5 space-y-4">
+                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+                  <p className="font-semibold mb-1 flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    Punching from Outside Office Network
+                  </p>
+                  You are punching in from outside the authorized office Wi-Fi network. Your attendance request has been forwarded to higher-level authorities (Admin / Super Admin / In-Charge / Team Leader) for review and approval.
+                </div>
+
+                {/* Captured verification parameters */}
+                <div className="bg-slate-50 dark:bg-slate-800/60 rounded-2xl p-3.5 border border-slate-200 dark:border-slate-700/60 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                      GPS Location
+                    </span>
+                    <span className="font-mono text-slate-800 dark:text-slate-200 font-medium text-[11px]">
+                      {showOffNetworkModal.latitude && showOffNetworkModal.longitude
+                        ? `${showOffNetworkModal.latitude.toFixed(4)}, ${showOffNetworkModal.longitude.toFixed(4)} (±${Math.round(showOffNetworkModal.accuracy || 0)}m)`
+                        : "Captured via browser"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 flex items-center gap-1.5">
+                      <WifiOff className="w-3.5 h-3.5 text-slate-400" />
+                      Network IP
+                    </span>
+                    <span className="font-mono text-slate-800 dark:text-slate-200 font-medium text-[11px]">
+                      {showOffNetworkModal.ipAddress || "Remote Network"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700">
+                    <span className="text-slate-500 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-500" />
+                      Approval Status
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200 font-bold text-[10px]">
+                      PENDING APPROVAL
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
+                  Note: Your work session timer is active. Once an authorized supervisor approves your punch, your attendance will be fully marked.
+                </p>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowOffNetworkModal(null)}
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>I Understand</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

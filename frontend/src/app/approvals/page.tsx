@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import {
   ShieldAlert,
   CheckCircle2,
@@ -189,17 +189,23 @@ export default function ApprovalsPage() {
     }
   }, [activeMainTab, user]);
 
+  const approvalsDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
   useRealtimeEvent(
     [
       "APPROVAL_STATUS_UPDATED",
       "TASK_STATUS_UPDATED",
       "CHECKIN_APPROVAL_REQUESTED",
-      "ATTENDANCE_UPDATED",
       "RESYNC",
     ],
     () => {
-      loadApprovals(true);
-      loadCheckins(true);
+      if (approvalsDebounceRef.current) {
+        clearTimeout(approvalsDebounceRef.current);
+      }
+      approvalsDebounceRef.current = setTimeout(() => {
+        loadApprovals(true);
+        loadCheckins(true);
+      }, 300);
     }
   );
 

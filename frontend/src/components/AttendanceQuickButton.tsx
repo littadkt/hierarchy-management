@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import {
@@ -13,6 +13,10 @@ import {
   X,
   FileSpreadsheet,
   ChevronRight,
+  WifiOff,
+  MapPin,
+  AlertTriangle,
+  ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useRealtimeEvent } from "@/context/RealtimeContext";
@@ -32,14 +36,24 @@ export const AttendanceQuickButton: React.FC = () => {
   const [note, setNote] = useState("");
   const [mounted, setMounted] = useState(false);
 
+  // Off-network check-in alert dialog
+  const [offNetworkAlert, setOffNetworkAlert] = useState<{
+    isOpen: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
+    accuracy?: number | null;
+    ipAddress?: string | null;
+  } | null>(null);
+
   useEffect(() => {
     setMounted(true);
   }, []);
 
   // Live timer tick
   const [liveSeconds, setLiveSeconds] = useState(0);
+  const fetchDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     if (!user) return;
     try {
       const data = await attendanceApi.getToday();
@@ -48,15 +62,29 @@ export const AttendanceQuickButton: React.FC = () => {
     } catch {
       // Soft fail
     }
-  };
+  }, [user]);
+
+  const debouncedFetchStatus = useCallback(() => {
+    if (fetchDebounceRef.current) {
+      clearTimeout(fetchDebounceRef.current);
+    }
+    fetchDebounceRef.current = setTimeout(() => {
+      fetchStatus();
+    }, 300);
+  }, [fetchStatus]);
 
   useEffect(() => {
     fetchStatus();
-  }, [user]);
+    return () => {
+      if (fetchDebounceRef.current) {
+        clearTimeout(fetchDebounceRef.current);
+      }
+    };
+  }, [fetchStatus]);
 
-  // Real-time auto sync
+  // Real-time auto sync with debounce
   useRealtimeEvent(["ATTENDANCE_UPDATED"], () => {
-    fetchStatus();
+    debouncedFetchStatus();
   });
 
   // Timer tick for active working session
@@ -88,17 +116,31 @@ export const AttendanceQuickButton: React.FC = () => {
     try {
       if (modalType === "CHECK_IN") {
         const coords = await getBrowserLocation();
-        await attendanceApi.checkIn({
+        const res = await attendanceApi.checkIn({
           note: note.trim() || undefined,
           latitude: coords.latitude,
           longitude: coords.longitude,
           accuracy: coords.accuracy,
         });
+
+        setModalType(null);
+        setNote("");
+
+        // Check if punch is outside office network requiring supervisor approval
+        if (res.approval_status === "PENDING" || res.requires_approval) {
+          setOffNetworkAlert({
+            isOpen: true,
+            latitude: res.latitude ?? coords.latitude,
+            longitude: res.longitude ?? coords.longitude,
+            accuracy: res.accuracy ?? coords.accuracy,
+            ipAddress: res.ip_address,
+          });
+        }
       } else {
         await attendanceApi.checkOut(note.trim() || undefined);
+        setModalType(null);
+        setNote("");
       }
-      setModalType(null);
-      setNote("");
       await fetchStatus();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -309,6 +351,97 @@ export const AttendanceQuickButton: React.FC = () => {
                 </div>
               </div>
             </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Off-Network Check-In Alert Dialog */}
+      {offNetworkAlert?.isOpen && mounted && createPortal(
+        <div className="fixed inset-0 z-[110] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/80 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-b border-amber-200 dark:border-amber-800/60 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
+                  <WifiOff className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">
+                    Off-Network Check-In Recorded
+                  </h3>
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400 font-semibold">
+                    Submitted for Higher-Level Approval
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOffNetworkAlert(null)}
+                className="p-1.5 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-4 sm:p-5 space-y-4">
+              <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+                <p className="font-semibold mb-1 flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  Outside Office Network Detected
+                </p>
+                You have punched in from outside the designated office Wi-Fi network. Your attendance request has been forwarded to your supervisor / administrators for review and approval.
+              </div>
+
+              {/* Captured verification parameters */}
+              <div className="bg-slate-50 dark:bg-slate-800/60 rounded-2xl p-3.5 border border-slate-200 dark:border-slate-700/60 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                    GPS Location
+                  </span>
+                  <span className="font-mono text-slate-800 dark:text-slate-200 font-medium text-[11px]">
+                    {offNetworkAlert.latitude && offNetworkAlert.longitude
+                      ? `${offNetworkAlert.latitude.toFixed(4)}, ${offNetworkAlert.longitude.toFixed(4)} (±${Math.round(offNetworkAlert.accuracy || 0)}m)`
+                      : "Captured via browser"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 flex items-center gap-1.5">
+                    <WifiOff className="w-3.5 h-3.5 text-slate-400" />
+                    Network IP
+                  </span>
+                  <span className="font-mono text-slate-800 dark:text-slate-200 font-medium text-[11px]">
+                    {offNetworkAlert.ipAddress || "Remote Network"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700">
+                  <span className="text-slate-500 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-500" />
+                    Approval Status
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200 font-bold text-[10px]">
+                    PENDING APPROVAL
+                  </span>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
+                Note: Your work shift timer is active. Once an authorized supervisor approves your check-in, your attendance will be confirmed.
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setOffNetworkAlert(null)}
+                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>I Understand</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>,
         document.body
