@@ -1,6 +1,6 @@
 import io
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 import uuid
 from fastapi import HTTPException, status
@@ -20,6 +20,7 @@ from app.core.permissions import (
     validate_can_edit_or_delete_task,
     validate_status_transition,
 )
+from app.models.attendance import Attendance, AttendanceStatus
 from app.models.task import RecurrencePattern, Task, TaskPriority, TaskStatus
 from app.models.task_activity import ActivityAction, TaskActivity
 from app.models.task_comment import TaskComment
@@ -109,6 +110,52 @@ class TaskService:
             raise HierarchyPermissionError("Staff can only view tasks assigned to or created by them.")
 
     @staticmethod
+    def is_user_on_leave_for_date(
+        user: Optional[User],
+        target_date: date,
+        leave_records: Optional[Set[Tuple[uuid.UUID, str]]] = None,
+    ) -> bool:
+        """
+        Determines if a user is marked on leave on a given target calendar date.
+        Checks:
+        1. Direct leave status on User:
+           - user.is_on_leave is True.
+           - If user.leave_date is specified (YYYY-MM-DD): matches if target_date equals that leave date.
+           - If user.leave_date is not specified: applies to today's date.
+           - If target_date is today's local date and user.is_on_leave is True.
+        2. Attendance record with status AttendanceStatus.ON_LEAVE for that user on target_date.
+        """
+        if not user:
+            return False
+
+        target_date_str = target_date.strftime("%Y-%m-%d")
+        today_local = datetime.now().astimezone().date()
+
+        # 1. Check Attendance records if provided
+        if leave_records and (user.id, target_date_str) in leave_records:
+            return True
+
+        # 2. Check user.is_on_leave flag
+        if user.is_on_leave:
+            if user.leave_date:
+                clean_ld = user.leave_date.strip()
+                if clean_ld == target_date_str:
+                    return True
+                try:
+                    parsed_dt = datetime.strptime(clean_ld, "%Y-%m-%d").date()
+                    if parsed_dt == target_date:
+                        return True
+                except Exception:
+                    pass
+                if target_date == today_local:
+                    return True
+            else:
+                if target_date == today_local:
+                    return True
+
+        return False
+
+    @staticmethod
     async def create_task(
         session: AsyncSession,
         creator: User,
@@ -171,6 +218,34 @@ class TaskService:
                 day_of_month=task_in.recurrence_day_of_month,
                 days_of_week=task_in.recurrence_days_of_week or days_str,
             )
+
+            # If assignee is marked on leave on effective_due_date, advance to next non-leave recurrence date
+            local_tz = datetime.now().astimezone().tzinfo
+            check_date = (effective_due_date or base_date).astimezone(local_tz).date()
+            if TaskService.is_user_on_leave_for_date(assignee, check_date):
+                max_adv = 30
+                while next_run and max_adv > 0:
+                    cand_date = next_run.astimezone(local_tz).date()
+                    if not TaskService.is_user_on_leave_for_date(assignee, cand_date):
+                        effective_due_date = next_run
+                        next_run = calculate_next_run_date(
+                            pattern=task_in.recurrence_pattern,
+                            interval=task_in.recurrence_interval,
+                            base_date=next_run,
+                            day_of_week=task_in.recurrence_day_of_week,
+                            day_of_month=task_in.recurrence_day_of_month,
+                            days_of_week=task_in.recurrence_days_of_week or days_str,
+                        )
+                        break
+                    next_run = calculate_next_run_date(
+                        pattern=task_in.recurrence_pattern,
+                        interval=task_in.recurrence_interval,
+                        base_date=next_run,
+                        day_of_week=task_in.recurrence_day_of_week,
+                        day_of_month=task_in.recurrence_day_of_month,
+                        days_of_week=task_in.recurrence_days_of_week or days_str,
+                    )
+                    max_adv -= 1
 
         task = Task(
             title=task_in.title,
@@ -2148,12 +2223,25 @@ class TaskService:
             .options(
                 selectinload(Task.child_instances),
                 selectinload(Task.subtasks),
+                selectinload(Task.assigned_to),
             )
         )
         result = await session.execute(stmt)
         recurring_templates = result.scalars().all()
 
+        # Batch-query all attendance records with ON_LEAVE status for assignees
+        assigned_user_ids = list({t.assigned_to_id for t in recurring_templates if t.assigned_to_id})
+        leave_records: Set[Tuple[uuid.UUID, str]] = set()
+        if assigned_user_ids:
+            att_stmt = select(Attendance.user_id, Attendance.date).where(
+                Attendance.user_id.in_(assigned_user_ids),
+                Attendance.status == AttendanceStatus.ON_LEAVE,
+            )
+            att_res = await session.execute(att_stmt)
+            leave_records = {(r[0], r[1]) for r in att_res.all()}
+
         spawned: List[Task] = []
+        deleted_tasks: List[Task] = []
         for template in recurring_templates:
             # Backfill root template due_date if missing
             if template.due_date is None:
@@ -2168,9 +2256,59 @@ class TaskService:
             existing_dates = set()
             root_date = template.due_date.astimezone(local_tz).date()
             existing_dates.add(root_date)
-            for child in template.child_instances:
+
+            # Check existing child instances: if any pending instance falls on a leave day for assignee, delete it
+            for child in list(template.child_instances):
                 if child.due_date:
-                    existing_dates.add(child.due_date.astimezone(local_tz).date())
+                    child_date = child.due_date.astimezone(local_tz).date()
+                    if (
+                        child.status == TaskStatus.PENDING
+                        and template.assigned_to
+                        and TaskService.is_user_on_leave_for_date(template.assigned_to, child_date, leave_records)
+                    ):
+                        logger.info(
+                            f"Deleting auto-spawned pending recurring task '{child.title}' (ID: {child.id}) "
+                            f"for {child_date} because assignee '{template.assigned_to.full_name}' is on leave."
+                        )
+                        await session.delete(child)
+                        deleted_tasks.append(child)
+                        existing_dates.add(child_date)
+                    else:
+                        existing_dates.add(child_date)
+
+            # Determine active allowed days of week
+            allowed_days = parse_days_of_week(template.recurrence_days_of_week)
+            if allowed_days is None and template.recurrence_day_of_week is not None and 0 <= template.recurrence_day_of_week <= 6:
+                allowed_days = [template.recurrence_day_of_week]
+
+            # If root template itself is PENDING, has no child instances yet, and is scheduled on a leave day,
+            # advance root template due_date to the first recurrence date where assignee is not on leave
+            if (
+                not template.child_instances
+                and template.status == TaskStatus.PENDING
+                and template.assigned_to
+                and TaskService.is_user_on_leave_for_date(template.assigned_to, root_date, leave_records)
+            ):
+                cand_dt = template.due_date
+                max_adv = 30
+                while max_adv > 0:
+                    cand_dt = calculate_next_run_date(
+                        pattern=template.recurrence_pattern,
+                        interval=template.recurrence_interval,
+                        base_date=cand_dt,
+                        day_of_week=template.recurrence_day_of_week,
+                        day_of_month=template.recurrence_day_of_month,
+                        days_of_week=allowed_days or template.recurrence_days_of_week,
+                    )
+                    if not cand_dt:
+                        break
+                    cand_date = cand_dt.astimezone(local_tz).date()
+                    if not TaskService.is_user_on_leave_for_date(template.assigned_to, cand_date, leave_records):
+                        template.due_date = cand_dt
+                        root_date = cand_date
+                        existing_dates = {root_date}
+                        break
+                    max_adv -= 1
 
             # Check if recurrence end date has passed
             if template.recurrence_end_date:
@@ -2180,12 +2318,7 @@ class TaskService:
                     template.next_run_date = None
                     continue
 
-            # Determine active allowed days of week
-            allowed_days = parse_days_of_week(template.recurrence_days_of_week)
-            if allowed_days is None and template.recurrence_day_of_week is not None and 0 <= template.recurrence_day_of_week <= 6:
-                allowed_days = [template.recurrence_day_of_week]
-
-            # 1. Ensure instance for TODAY exists (only if today is an active recurrence day)
+            # 1. Ensure instance for TODAY exists (only if today is an active recurrence day and assignee is NOT on leave)
             today_weekday = today_date.weekday()  # 0 = Monday ... 6 = Sunday
             should_spawn_today = True
             if allowed_days is not None:
@@ -2196,45 +2329,56 @@ class TaskService:
                     should_spawn_today = False
 
             if should_spawn_today and today_date not in existing_dates:
-                today_due = datetime.combine(today_date, ref_time, tzinfo=local_tz)
-                today_task = Task(
-                    title=template.title,
-                    description=template.description,
-                    priority=template.priority,
-                    status=TaskStatus.PENDING,
-                    due_date=today_due,
-                    created_by_id=template.created_by_id,
-                    assigned_to_id=template.assigned_to_id,
-                    requires_approval=template.requires_approval,
-                    approver_id=template.approver_id,
-                    is_recurring=True,
-                    recurrence_pattern=template.recurrence_pattern,
-                    recurrence_interval=template.recurrence_interval,
-                    recurrence_day_of_week=template.recurrence_day_of_week,
-                    recurrence_days_of_week=template.recurrence_days_of_week,
-                    recurrence_day_of_month=template.recurrence_day_of_month,
-                    recurrence_end_date=template.recurrence_end_date,
-                    parent_task_id=template.id,
+                assignee_on_leave_today = (
+                    template.assigned_to is not None
+                    and TaskService.is_user_on_leave_for_date(template.assigned_to, today_date, leave_records)
                 )
-                session.add(today_task)
-                await session.flush()
+                if assignee_on_leave_today:
+                    logger.info(
+                        f"Skipping recurring task '{template.title}' (ID: {template.id}) for today ({today_date}) "
+                        f"because assigned user '{template.assigned_to.full_name}' is marked on leave."
+                    )
+                    existing_dates.add(today_date)
+                else:
+                    today_due = datetime.combine(today_date, ref_time, tzinfo=local_tz)
+                    today_task = Task(
+                        title=template.title,
+                        description=template.description,
+                        priority=template.priority,
+                        status=TaskStatus.PENDING,
+                        due_date=today_due,
+                        created_by_id=template.created_by_id,
+                        assigned_to_id=template.assigned_to_id,
+                        requires_approval=template.requires_approval,
+                        approver_id=template.approver_id,
+                        is_recurring=True,
+                        recurrence_pattern=template.recurrence_pattern,
+                        recurrence_interval=template.recurrence_interval,
+                        recurrence_day_of_week=template.recurrence_day_of_week,
+                        recurrence_days_of_week=template.recurrence_days_of_week,
+                        recurrence_day_of_month=template.recurrence_day_of_month,
+                        recurrence_end_date=template.recurrence_end_date,
+                        parent_task_id=template.id,
+                    )
+                    session.add(today_task)
+                    await session.flush()
 
-                # Replicate subtasks
-                await TaskService._copy_subtasks_to_recurring_instance(
-                    session=session,
-                    root_parent=template,
-                    target_instance=today_task,
-                )
+                    # Replicate subtasks
+                    await TaskService._copy_subtasks_to_recurring_instance(
+                        session=session,
+                        root_parent=template,
+                        target_instance=today_task,
+                    )
 
-                activity = TaskActivity(
-                    task_id=today_task.id,
-                    user_id=template.created_by_id,
-                    action=ActivityAction.RECURRENCE_GENERATED,
-                    details="Scheduled instance generated for today's run.",
-                )
-                session.add(activity)
-                spawned.append(today_task)
-                existing_dates.add(today_date)
+                    activity = TaskActivity(
+                        task_id=today_task.id,
+                        user_id=template.created_by_id,
+                        action=ActivityAction.RECURRENCE_GENERATED,
+                        details="Scheduled instance generated for today's run.",
+                    )
+                    session.add(activity)
+                    spawned.append(today_task)
+                    existing_dates.add(today_date)
 
             # 2. Ensure upcoming instance exists for the NEXT valid occurrence so it appears in "Upcoming"
             today_dt = datetime.combine(today_date, ref_time, tzinfo=local_tz)
@@ -2247,6 +2391,31 @@ class TaskService:
                 days_of_week=allowed_days or template.recurrence_days_of_week,
             )
             target_upcoming_date = next_calc.astimezone(local_tz).date() if next_calc else None
+
+            # Skip upcoming dates where the assigned user is marked on leave
+            max_lookahead = 30
+            while (
+                target_upcoming_date
+                and template.assigned_to
+                and TaskService.is_user_on_leave_for_date(template.assigned_to, target_upcoming_date, leave_records)
+                and max_lookahead > 0
+            ):
+                logger.info(
+                    f"Skipping upcoming recurrence date {target_upcoming_date} for '{template.title}' "
+                    f"because assigned user '{template.assigned_to.full_name}' is on leave."
+                )
+                existing_dates.add(target_upcoming_date)
+                cand_dt = datetime.combine(target_upcoming_date, ref_time, tzinfo=local_tz)
+                next_calc = calculate_next_run_date(
+                    pattern=template.recurrence_pattern,
+                    interval=template.recurrence_interval,
+                    base_date=cand_dt,
+                    day_of_week=template.recurrence_day_of_week,
+                    day_of_month=template.recurrence_day_of_month,
+                    days_of_week=allowed_days or template.recurrence_days_of_week,
+                )
+                target_upcoming_date = next_calc.astimezone(local_tz).date() if next_calc else None
+                max_lookahead -= 1
 
             if target_upcoming_date and target_upcoming_date not in existing_dates:
                 can_spawn_upcoming = True
@@ -2307,7 +2476,7 @@ class TaskService:
                 days_of_week=allowed_days or template.recurrence_days_of_week,
             )
 
-        if spawned:
+        if spawned or deleted_tasks:
             await session.commit()
             for t in spawned:
                 await broadcaster.broadcast("TASK_CREATED", {
@@ -2315,6 +2484,10 @@ class TaskService:
                     "created_by_id": str(t.created_by_id) if t.created_by_id else None,
                     "assigned_to_id": str(t.assigned_to_id) if t.assigned_to_id else None,
                     "status": str(t.status.value if hasattr(t.status, "value") else t.status),
+                })
+            for dt in deleted_tasks:
+                await broadcaster.broadcast("TASK_DELETED", {
+                    "task_id": str(dt.id),
                 })
 
         return spawned

@@ -6,7 +6,7 @@ from sqlalchemy.pool import NullPool
 from app.api.deps import get_db
 from app.core.config import settings
 from app.db.base import Base
-from app.db.init_db import init_branches, init_demo_users, init_departments, init_super_admin
+from app.db.init_db import init_branches, init_departments, init_super_admin
 from app.main import app
 
 test_engine = create_async_engine(
@@ -56,15 +56,33 @@ app.dependency_overrides[get_db] = override_get_db
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def setup_db():
+    from sqlalchemy import text
     async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        for tbl in [
+            "task_attachments", "task_comments", "task_activities",
+            "checklist_items", "subtasks", "tasks",
+            "attendance_records", "user_login_records",
+            "purchase_request_histories", "purchase_requests",
+            "wholesale_orders", "wholesale_products", "wholesale_customers",
+            "warranty_jobs", "warranty_staff", "warranty_models", "warranty_brands", "warranty_service_types",
+            "notifications", "time_schedules",
+        ]:
+            try:
+                await conn.execute(text(f"DELETE FROM {tbl} WHERE TRUE;"))
+            except Exception:
+                pass
+        try:
+            await conn.execute(text("DELETE FROM users WHERE email NOT IN ('littadkt@gmail.com', 'waleed@gmail.com');"))
+        except Exception:
+            pass
 
     async with TestSessionLocal() as session:
         await init_super_admin(session)
         await init_branches(session)
         await init_departments(session)
-        await init_demo_users(session)
+        from app.db.seed_demo_data import seed_data
+        await seed_data()
         from app.models.user import User, Role
         from app.core.security import get_password_hash
         from sqlalchemy import select
@@ -94,4 +112,16 @@ async def async_client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def clean_tasks_between_tests():
+    yield
+    from sqlalchemy import text
+    async with test_engine.begin() as conn:
+        for tbl in ["task_attachments", "task_comments", "task_activities", "checklist_items", "subtasks", "tasks"]:
+            try:
+                await conn.execute(text(f"DELETE FROM {tbl} WHERE TRUE;"))
+            except Exception:
+                pass
 

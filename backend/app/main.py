@@ -18,7 +18,6 @@ from app.core.permissions import HierarchyPermissionError
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.db.init_db import (
     init_branches,
-    init_demo_users,
     init_departments,
     init_models,
     init_super_admin,
@@ -44,7 +43,6 @@ async def lifespan(app: FastAPI):
         await init_super_admin(session)
         await init_branches(session)
         await init_departments(session)
-        await init_demo_users(session)
         await init_warranty_defaults(session)
 
     logger.info("Starting background recurrence scheduler...")

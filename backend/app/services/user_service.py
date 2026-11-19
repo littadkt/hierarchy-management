@@ -280,15 +280,88 @@ class UserService:
             if user_in.is_on_leave:
                 target.leave_date = user_in.leave_date or datetime.now().astimezone().strftime("%Y-%m-%d")
                 target.leave_reason = user_in.leave_reason or "Marked on leave"
+                await UserService.cleanup_pending_recurring_tasks_on_leave(session, target.id, target.leave_date)
             else:
                 target.leave_date = None
                 target.leave_reason = None
+                try:
+                    from app.services.task_service import TaskService
+                    await TaskService.spawn_due_recurring_tasks(session)
+                except Exception:
+                    pass
 
         if user_in.permissions is not None and operator.role in [Role.SUPER_ADMIN, Role.ADMIN]:
             target.permissions = user_in.permissions
 
         await session.commit()
         return target
+
+    @staticmethod
+    async def cleanup_pending_recurring_tasks_on_leave(
+        session: AsyncSession,
+        user_id: uuid.UUID,
+        leave_date_str: str,
+    ) -> int:
+        """
+        Removes any auto-spawned child recurring tasks assigned to user that are still PENDING
+        and scheduled on the leave date. Also advances any unstarted root recurring template.
+        """
+        try:
+            leave_dt = datetime.strptime(leave_date_str.strip(), "%Y-%m-%d").date()
+            local_now = datetime.now().astimezone()
+            tz = local_now.tzinfo
+            start_of_day = datetime(leave_dt.year, leave_dt.month, leave_dt.day, 0, 0, 0, tzinfo=tz)
+            end_of_day = datetime(leave_dt.year, leave_dt.month, leave_dt.day, 23, 59, 59, 999999, tzinfo=tz)
+
+            # 1. Delete child recurring instances assigned to user on leave date
+            stmt = (
+                select(Task)
+                .where(
+                    Task.assigned_to_id == user_id,
+                    Task.is_recurring == True,
+                    Task.parent_task_id != None,
+                    Task.status == TaskStatus.PENDING,
+                    Task.due_date >= start_of_day,
+                    Task.due_date <= end_of_day,
+                )
+            )
+            res = await session.execute(stmt)
+            tasks_to_delete = res.scalars().all()
+            for t in tasks_to_delete:
+                await session.delete(t)
+
+            # 2. Advance any root recurring templates assigned to user due on leave date with no children
+            root_stmt = (
+                select(Task)
+                .where(
+                    Task.assigned_to_id == user_id,
+                    Task.is_recurring == True,
+                    Task.parent_task_id == None,
+                    Task.status == TaskStatus.PENDING,
+                    Task.due_date >= start_of_day,
+                    Task.due_date <= end_of_day,
+                )
+                .options(selectinload(Task.child_instances))
+            )
+            root_res = await session.execute(root_stmt)
+            for root_task in root_res.scalars().all():
+                if not root_task.child_instances:
+                    from app.services.recurrence_service import calculate_next_run_date, parse_days_of_week
+                    allowed = parse_days_of_week(root_task.recurrence_days_of_week)
+                    next_cand = calculate_next_run_date(
+                        pattern=root_task.recurrence_pattern,
+                        interval=root_task.recurrence_interval,
+                        base_date=root_task.due_date,
+                        day_of_week=root_task.recurrence_day_of_week,
+                        day_of_month=root_task.recurrence_day_of_month,
+                        days_of_week=allowed or root_task.recurrence_days_of_week,
+                    )
+                    if next_cand:
+                        root_task.due_date = next_cand
+
+            return len(tasks_to_delete)
+        except Exception:
+            return 0
 
     @staticmethod
     async def set_user_leave(
@@ -354,12 +427,22 @@ class UserService:
             else:
                 att.status = AttendanceStatus.ON_LEAVE
                 att.check_in_note = f"[ON LEAVE] {target.leave_reason}"
+
+            # Clean up any recurring tasks scheduled on leave date
+            await UserService.cleanup_pending_recurring_tasks_on_leave(session, target.id, target_date)
         else:
             if att and att.status == AttendanceStatus.ON_LEAVE:
                 await session.delete(att)
 
         await session.commit()
         await session.refresh(target)
+
+        if not payload.is_on_leave:
+            try:
+                from app.services.task_service import TaskService
+                await TaskService.spawn_due_recurring_tasks(session)
+            except Exception:
+                pass
 
         await broadcaster.broadcast("USER_LEAVE_UPDATED", {
             "user_id": str(target.id),
@@ -665,7 +748,9 @@ class UserService:
         elif current_user.role == Role.IN_CHARGE:
             ic_dept = (current_user.department or (current_user.manager.department if current_user.manager else "") or "").strip()
             ic_branch = (current_user.branch or (current_user.manager.branch if current_user.manager else "") or "").strip()
-            sub_filter = User.role.in_([Role.TEAM_LEADER, Role.STAFF])
+            # In-Charge Level 3 provision: can see Team Leaders under them,
+            # but CANNOT see the users under the Team Leader (Staff) in hierarchy
+            sub_filter = (User.role == Role.TEAM_LEADER)
             if ic_dept:
                 sub_filter = sub_filter & (
                     (func.lower(func.trim(User.department)) == ic_dept.lower())

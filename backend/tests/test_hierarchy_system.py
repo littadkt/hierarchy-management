@@ -397,3 +397,70 @@ async def test_comments_and_rejection_workflow(async_client: AsyncClient):
     assert "APPROVAL_REQUESTED" in actions
     assert "REJECTED" in actions
 
+
+@pytest.mark.asyncio
+async def test_incharge_hierarchy_scoping_provision(async_client: AsyncClient):
+    """
+    Provision:
+    'when an incharge user level 3 user logins and checks the org hierarchy tree
+     he can see the team leaders under them but CANNOT see the users under the team leader (staff)'
+    """
+    # 1. Login as In-Charge (Operations department, Kochi branch)
+    incharge_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "incharge@example.com", "password": "InCharge@123"},
+    )
+    assert incharge_login.status_code == 200
+    incharge_headers = {"Authorization": f"Bearer {incharge_login.json()['access_token']}"}
+
+    # 2. Check /hierarchy/overview for In-Charge
+    overview_res = await async_client.get("/api/v1/hierarchy/overview", headers=incharge_headers)
+    assert overview_res.status_code == 200
+    overview_users = overview_res.json()
+    overview_roles = {u["role"] for u in overview_users}
+
+    # In-Charge should see self and Team Leaders under them
+    assert "IN_CHARGE" in overview_roles
+    # Must NOT see STAFF
+    assert "STAFF" not in overview_roles, "In-Charge must not see staff under team leader in hierarchy overview"
+
+    # 3. Check /hierarchy/tree for In-Charge
+    tree_res = await async_client.get("/api/v1/hierarchy/tree", headers=incharge_headers)
+    assert tree_res.status_code == 200
+    tree_nodes = tree_res.json()
+
+    # Recursively check roles in tree
+    def collect_nodes(nodes):
+        res = []
+        for n in nodes:
+            res.append(n)
+            if n.get("subordinates"):
+                res.extend(collect_nodes(n["subordinates"]))
+        return res
+
+    all_tree_nodes = collect_nodes(tree_nodes)
+    tree_roles = {n["role"] for n in all_tree_nodes}
+
+    # In-Charge should see self and Team Leaders
+    assert "IN_CHARGE" in tree_roles
+    # Must NOT see STAFF in tree
+    assert "STAFF" not in tree_roles, "In-Charge must not see staff under team leader in hierarchy tree"
+
+    # Verify that all TEAM_LEADER nodes have empty subordinates
+    tl_nodes = [n for n in all_tree_nodes if n["role"] == "TEAM_LEADER"]
+    for tl in tl_nodes:
+        assert len(tl.get("subordinates", [])) == 0, "Team Leader must have no visible subordinates for In-Charge"
+
+    # 4. Verify that Super Admin CAN see staff under team leaders
+    sa_login = await async_client.post(
+        "/api/v1/auth/login",
+        data={"username": "superadmin@example.com", "password": "SuperAdmin@123"},
+    )
+    sa_headers = {"Authorization": f"Bearer {sa_login.json()['access_token']}"}
+    sa_tree_res = await async_client.get("/api/v1/hierarchy/tree", headers=sa_headers)
+    assert sa_tree_res.status_code == 200
+    sa_all_nodes = collect_nodes(sa_tree_res.json())
+    sa_roles = {n["role"] for n in sa_all_nodes}
+    assert "STAFF" in sa_roles, "Super Admin should see staff in hierarchy tree"
+
+

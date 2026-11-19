@@ -285,6 +285,7 @@ export default function HierarchyPage() {
                 { role: "STAFF", title: "Operational Staff", color: "slate" },
               ] as const
             ).map((group) => {
+              if (user?.role === "IN_CHARGE" && group.role === "STAFF") return null;
               const members = roleGroups[group.role] || [];
               if (members.length === 0) return null;
 
@@ -451,6 +452,7 @@ export default function HierarchyPage() {
                   level={0}
                   canManageLeave={canManageLeave}
                   onToggleLeave={handleToggleLeave}
+                  viewerRole={user?.role}
                 />
               ))}
             </div>
@@ -550,9 +552,12 @@ const TreeNode: React.FC<{
   level: number;
   canManageLeave: (node: any) => boolean;
   onToggleLeave: (node: any) => void;
-}> = ({ node, level, canManageLeave, onToggleLeave }) => {
+  viewerRole?: Role;
+}> = ({ node, level, canManageLeave, onToggleLeave, viewerRole }) => {
   const [expanded, setExpanded] = useState(true);
-  const hasChildren = node.subordinates && node.subordinates.length > 0;
+  // In-Charge level 3 provision: cannot see users under team leader in org tree
+  const isBlockedUnderTeamLeader = viewerRole === "IN_CHARGE" && node.role === "TEAM_LEADER";
+  const hasChildren = !isBlockedUnderTeamLeader && node.subordinates && node.subordinates.length > 0;
 
   return (
     <div className="text-xs">
@@ -631,7 +636,7 @@ const TreeNode: React.FC<{
         </div>
       </div>
 
-      {hasChildren && expanded && (
+      {hasChildren && expanded && !isBlockedUnderTeamLeader && (
         <div className="border-l-2 border-indigo-100 dark:border-slate-800 ml-4 pl-2 space-y-2 mt-2">
           {node.subordinates.map((subNode: any) => (
             <TreeNode
@@ -640,6 +645,7 @@ const TreeNode: React.FC<{
               level={level + 1}
               canManageLeave={canManageLeave}
               onToggleLeave={onToggleLeave}
+              viewerRole={viewerRole}
             />
           ))}
         </div>

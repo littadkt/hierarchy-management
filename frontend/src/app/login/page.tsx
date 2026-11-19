@@ -43,14 +43,6 @@ export default function LoginPage() {
     }
   };
 
-  const demoAccounts = [
-    { role: "Super Admin", email: "littadkt@gmail.com", pass: "littad#404", badge: "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300" },
-    { role: "Admin", email: "admin@example.com", pass: "Admin@123", desc: "Kochi Branch", badge: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
-    { role: "In-Charge", email: "incharge@example.com", pass: "InCharge@123", desc: "Operations", badge: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300" },
-    { role: "Team Leader", email: "teamleader@example.com", pass: "TeamLeader@123", desc: "Engineering", badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
-    { role: "Staff", email: "staff1@example.com", pass: "Staff@123", desc: "Eng / Kochi", badge: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" },
-  ];
-
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 dark:bg-gradient-to-br dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 flex flex-col justify-center items-center p-4 sm:p-6 text-slate-900 dark:text-white relative transition-colors duration-200">
       {/* Top Header Actions (Theme Toggle) */}
@@ -145,37 +137,6 @@ export default function LoginPage() {
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
-
-          {/* Quick Demo Fill Buttons */}
-          {/* <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-700/60">
-            <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2.5">
-              Quick Test Accounts (Click to Fill)
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-              {demoAccounts.map((account) => (
-                <button
-                  key={account.email}
-                  type="button"
-                  onClick={() => {
-                    setEmail(account.email);
-                    setPassword(account.pass);
-                    setError(null);
-                  }}
-                  className="flex items-center justify-between text-left p-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900/50 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-slate-200 dark:border-slate-700/50 hover:border-indigo-300 dark:hover:border-indigo-700 transition-all cursor-pointer"
-                >
-                  <div className="truncate mr-1">
-                    <div className="font-semibold text-slate-800 dark:text-slate-200">{account.role}</div>
-                    <div className="text-[10px] text-slate-400 dark:text-slate-500 truncate">{account.email}</div>
-                  </div>
-                  {account.desc && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
-                      {account.desc}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div> */}
         </div>
 
         {/* Footer */}

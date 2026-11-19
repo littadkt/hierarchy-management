@@ -69,9 +69,19 @@ async def get_hierarchy_tree(
     for u in users_with_stats:
         node = node_map[u.id]
         if u.reports_to_id and u.reports_to_id in node_map and u.reports_to_id != u.id:
-            node_map[u.reports_to_id]["subordinates"].append(node)
+            parent_node = node_map[u.reports_to_id]
+            # In-Charge level 3 provision: cannot see users under team leader
+            if current_user.role == Role.IN_CHARGE and parent_node["role"] == Role.TEAM_LEADER.value:
+                continue
+            parent_node["subordinates"].append(node)
         else:
             roots.append(node)
+
+    # Explicit safeguard: for IN_CHARGE, clear any subordinates under TEAM_LEADER
+    if current_user.role == Role.IN_CHARGE:
+        for node in node_map.values():
+            if node["role"] == Role.TEAM_LEADER.value:
+                node["subordinates"] = []
 
     return roots
 
