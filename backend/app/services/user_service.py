@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 import uuid
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -596,6 +596,17 @@ class UserService:
         if current_user.role == Role.IN_CHARGE:
             ic_dept = (current_user.department or (current_user.manager.department if current_user.manager else "") or "").strip().lower()
             ic_branch = (current_user.branch or (current_user.manager.branch if current_user.manager else "") or "").strip().lower()
+
+            # Identify team leaders under In-Charge (direct reports or within department/branch)
+            tl_ids = set()
+            for u in all_active:
+                if u.role == Role.TEAM_LEADER:
+                    if u.reports_to_id == current_user.id:
+                        tl_ids.add(u.id)
+                    elif ic_dept and (u.department or "").strip().lower() == ic_dept:
+                        if not ic_branch or not u.branch or (u.branch or "").strip().lower() == ic_branch:
+                            tl_ids.add(u.id)
+
             allowed = []
             for u in all_active:
                 if u.id == current_user.id:
@@ -605,9 +616,10 @@ class UserService:
                     u_dept = (u.department or "").strip().lower()
                     u_branch = (u.branch or "").strip().lower()
                     is_direct = (u.reports_to_id == current_user.id)
+                    is_under_tl = (u.reports_to_id in tl_ids)
                     dept_match = (u_dept == ic_dept) if (ic_dept and u_dept) else (not ic_dept)
                     branch_match = (u_branch == ic_branch) if (ic_branch and u_branch) else True
-                    if is_direct or (dept_match and branch_match):
+                    if is_direct or is_under_tl or (dept_match and branch_match):
                         allowed.append(u)
             return sorted(allowed, key=lambda u: (u.role.level, u.full_name))
 
@@ -666,20 +678,44 @@ class UserService:
         if current_user.role == Role.IN_CHARGE:
             ic_dept = (current_user.department or (current_user.manager.department if current_user.manager else "") or "").strip()
             ic_branch = (current_user.branch or (current_user.manager.branch if current_user.manager else "") or "").strip()
-            sub_filter = User.role.in_([Role.TEAM_LEADER, Role.STAFF])
+
+            tl_conds = [User.role == Role.TEAM_LEADER]
             if ic_dept:
-                sub_filter = sub_filter & (
-                    (func.lower(func.trim(User.department)) == ic_dept.lower())
-                    | (User.reports_to_id == current_user.id)
-                )
+                dept_or_direct = (func.lower(func.trim(User.department)) == ic_dept.lower()) | (User.reports_to_id == current_user.id)
                 if ic_branch:
-                    sub_filter = sub_filter & (
-                        (User.branch == None)
-                        | (func.lower(func.trim(User.branch)) == ic_branch.lower())
-                        | (User.reports_to_id == current_user.id)
+                    tl_conds.append(
+                        dept_or_direct & (
+                            (User.branch == None)
+                            | (func.lower(func.trim(User.branch)) == ic_branch.lower())
+                            | (User.reports_to_id == current_user.id)
+                        )
                     )
+                else:
+                    tl_conds.append(dept_or_direct)
             else:
-                sub_filter = sub_filter & (User.reports_to_id == current_user.id)
+                tl_conds.append(User.reports_to_id == current_user.id)
+
+            tl_subquery = select(User.id).where(and_(*tl_conds))
+
+            dept_branch_match = (
+                (func.lower(func.trim(User.department)) == ic_dept.lower())
+                & (
+                    (User.branch == None)
+                    | (func.lower(func.trim(User.branch)) == ic_branch.lower())
+                )
+            ) if ic_dept and ic_branch else (
+                (func.lower(func.trim(User.department)) == ic_dept.lower()) if ic_dept else False
+            )
+
+            scoped_conds = [
+                User.role.in_([Role.TEAM_LEADER, Role.STAFF]),
+                or_(
+                    User.reports_to_id == current_user.id,
+                    User.reports_to_id.in_(tl_subquery),
+                    dept_branch_match,
+                ),
+            ]
+            sub_filter = and_(*scoped_conds)
             stmt = stmt.where(sub_filter | (User.id == current_user.id))
             res = await session.execute(stmt)
             return list(res.scalars().all())
@@ -748,22 +784,45 @@ class UserService:
         elif current_user.role == Role.IN_CHARGE:
             ic_dept = (current_user.department or (current_user.manager.department if current_user.manager else "") or "").strip()
             ic_branch = (current_user.branch or (current_user.manager.branch if current_user.manager else "") or "").strip()
-            # In-Charge Level 3 provision: can see Team Leaders under them,
-            # but CANNOT see the users under the Team Leader (Staff) in hierarchy
-            sub_filter = (User.role == Role.TEAM_LEADER)
+
+            # In-Charge provision: can see Team Leaders under them AND the staff level users under those Team Leaders
+            tl_conds = [User.role == Role.TEAM_LEADER]
             if ic_dept:
-                sub_filter = sub_filter & (
-                    (func.lower(func.trim(User.department)) == ic_dept.lower())
-                    | (User.reports_to_id == current_user.id)
-                )
+                dept_or_direct = (func.lower(func.trim(User.department)) == ic_dept.lower()) | (User.reports_to_id == current_user.id)
                 if ic_branch:
-                    sub_filter = sub_filter & (
-                        (User.branch == None)
-                        | (func.lower(func.trim(User.branch)) == ic_branch.lower())
-                        | (User.reports_to_id == current_user.id)
+                    tl_conds.append(
+                        dept_or_direct & (
+                            (User.branch == None)
+                            | (func.lower(func.trim(User.branch)) == ic_branch.lower())
+                            | (User.reports_to_id == current_user.id)
+                        )
                     )
+                else:
+                    tl_conds.append(dept_or_direct)
             else:
-                sub_filter = sub_filter & (User.reports_to_id == current_user.id)
+                tl_conds.append(User.reports_to_id == current_user.id)
+
+            tl_subquery = select(User.id).where(and_(*tl_conds))
+
+            dept_branch_match = (
+                (func.lower(func.trim(User.department)) == ic_dept.lower())
+                & (
+                    (User.branch == None)
+                    | (func.lower(func.trim(User.branch)) == ic_branch.lower())
+                )
+            ) if ic_dept and ic_branch else (
+                (func.lower(func.trim(User.department)) == ic_dept.lower()) if ic_dept else False
+            )
+
+            scoped_conds = [
+                User.role.in_([Role.TEAM_LEADER, Role.STAFF]),
+                or_(
+                    User.reports_to_id == current_user.id,
+                    User.reports_to_id.in_(tl_subquery),
+                    dept_branch_match,
+                ),
+            ]
+            sub_filter = and_(*scoped_conds)
             stmt = (
                 select(User)
                 .where(sub_filter | (User.id == current_user.id))

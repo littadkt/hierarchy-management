@@ -402,8 +402,7 @@ async def test_comments_and_rejection_workflow(async_client: AsyncClient):
 async def test_incharge_hierarchy_scoping_provision(async_client: AsyncClient):
     """
     Provision:
-    'when an incharge user level 3 user logins and checks the org hierarchy tree
-     he can see the team leaders under them but CANNOT see the users under the team leader (staff)'
+    'for an incharge user, they can see the team leaders under them AND they can also see the staff level users under those team leaders'
     """
     # 1. Login as In-Charge (Operations department, Kochi branch)
     incharge_login = await async_client.post(
@@ -419,10 +418,10 @@ async def test_incharge_hierarchy_scoping_provision(async_client: AsyncClient):
     overview_users = overview_res.json()
     overview_roles = {u["role"] for u in overview_users}
 
-    # In-Charge should see self and Team Leaders under them
+    # In-Charge should see self, Team Leaders under them, and Staff under those Team Leaders
     assert "IN_CHARGE" in overview_roles
-    # Must NOT see STAFF
-    assert "STAFF" not in overview_roles, "In-Charge must not see staff under team leader in hierarchy overview"
+    assert "TEAM_LEADER" in overview_roles
+    assert "STAFF" in overview_roles, "In-Charge should see staff under team leader in hierarchy overview"
 
     # 3. Check /hierarchy/tree for In-Charge
     tree_res = await async_client.get("/api/v1/hierarchy/tree", headers=incharge_headers)
@@ -441,15 +440,14 @@ async def test_incharge_hierarchy_scoping_provision(async_client: AsyncClient):
     all_tree_nodes = collect_nodes(tree_nodes)
     tree_roles = {n["role"] for n in all_tree_nodes}
 
-    # In-Charge should see self and Team Leaders
+    # In-Charge should see self, Team Leaders, and Staff
     assert "IN_CHARGE" in tree_roles
-    # Must NOT see STAFF in tree
-    assert "STAFF" not in tree_roles, "In-Charge must not see staff under team leader in hierarchy tree"
+    assert "TEAM_LEADER" in tree_roles
+    assert "STAFF" in tree_roles, "In-Charge should see staff under team leader in hierarchy tree"
 
-    # Verify that all TEAM_LEADER nodes have empty subordinates
+    # Verify that TEAM_LEADER nodes under In-Charge have their subordinates visible
     tl_nodes = [n for n in all_tree_nodes if n["role"] == "TEAM_LEADER"]
-    for tl in tl_nodes:
-        assert len(tl.get("subordinates", [])) == 0, "Team Leader must have no visible subordinates for In-Charge"
+    assert any(len(tl.get("subordinates", [])) > 0 for tl in tl_nodes), "Team Leader must have visible staff subordinates for In-Charge"
 
     # 4. Verify that Super Admin CAN see staff under team leaders
     sa_login = await async_client.post(

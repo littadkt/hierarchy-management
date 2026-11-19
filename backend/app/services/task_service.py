@@ -397,15 +397,17 @@ class TaskService:
                 )
             )
         elif current_user.role == Role.IN_CHARGE:
-            # Subordinates (Team Leader, Staff in department) and own
+            # Subordinates (Team Leader, Staff under Team Leaders, and Staff in department) and own
             ic_dept = (current_user.department or "").strip()
             ic_branch = (current_user.branch or "").strip()
+            tl_ids_stmt = select(User.id).where(User.role == Role.TEAM_LEADER, User.reports_to_id == current_user.id)
             sub_ids_stmt = select(User.id).where(User.role.in_([Role.TEAM_LEADER, Role.STAFF]))
             if ic_dept:
                 sub_ids_stmt = sub_ids_stmt.where(
                     or_(
                         func.lower(func.trim(User.department)) == ic_dept.lower(),
                         User.reports_to_id == current_user.id,
+                        User.reports_to_id.in_(tl_ids_stmt),
                     )
                 )
                 if ic_branch:
@@ -414,10 +416,16 @@ class TaskService:
                             User.branch == None,
                             func.lower(func.trim(User.branch)) == ic_branch.lower(),
                             User.reports_to_id == current_user.id,
+                            User.reports_to_id.in_(tl_ids_stmt),
                         )
                     )
             else:
-                sub_ids_stmt = sub_ids_stmt.where(User.reports_to_id == current_user.id)
+                sub_ids_stmt = sub_ids_stmt.where(
+                    or_(
+                        User.reports_to_id == current_user.id,
+                        User.reports_to_id.in_(tl_ids_stmt),
+                    )
+                )
 
             stmt = stmt.where(
                 or_(
@@ -589,12 +597,14 @@ class TaskService:
             scope_label = "department"
             ic_dept = (current_user.department or "").strip()
             ic_branch = (current_user.branch or "").strip()
+            tl_ids_stmt = select(User.id).where(User.role == Role.TEAM_LEADER, User.reports_to_id == current_user.id)
             sub_ids_stmt = select(User.id).where(User.role.in_([Role.TEAM_LEADER, Role.STAFF]))
             if ic_dept:
                 sub_ids_stmt = sub_ids_stmt.where(
                     or_(
                         func.lower(func.trim(User.department)) == ic_dept.lower(),
                         User.reports_to_id == current_user.id,
+                        User.reports_to_id.in_(tl_ids_stmt),
                     )
                 )
                 if ic_branch:
@@ -603,10 +613,16 @@ class TaskService:
                             User.branch == None,
                             func.lower(func.trim(User.branch)) == ic_branch.lower(),
                             User.reports_to_id == current_user.id,
+                            User.reports_to_id.in_(tl_ids_stmt),
                         )
                     )
             else:
-                sub_ids_stmt = sub_ids_stmt.where(User.reports_to_id == current_user.id)
+                sub_ids_stmt = sub_ids_stmt.where(
+                    or_(
+                        User.reports_to_id == current_user.id,
+                        User.reports_to_id.in_(tl_ids_stmt),
+                    )
+                )
 
             stmt = stmt.where(
                 or_(
@@ -904,12 +920,14 @@ class TaskService:
         elif current_user.role == Role.IN_CHARGE:
             ic_dept = (current_user.department or "").strip()
             ic_branch = (current_user.branch or "").strip()
+            tl_ids_stmt = select(User.id).where(User.role == Role.TEAM_LEADER, User.reports_to_id == current_user.id)
             sub_ids_stmt = select(User.id).where(User.role.in_([Role.TEAM_LEADER, Role.STAFF]))
             if ic_dept:
                 sub_ids_stmt = sub_ids_stmt.where(
                     or_(
                         func.lower(func.trim(User.department)) == ic_dept.lower(),
                         User.reports_to_id == current_user.id,
+                        User.reports_to_id.in_(tl_ids_stmt),
                     )
                 )
                 if ic_branch:
@@ -918,10 +936,16 @@ class TaskService:
                             User.branch == None,
                             func.lower(func.trim(User.branch)) == ic_branch.lower(),
                             User.reports_to_id == current_user.id,
+                            User.reports_to_id.in_(tl_ids_stmt),
                         )
                     )
             else:
-                sub_ids_stmt = sub_ids_stmt.where(User.reports_to_id == current_user.id)
+                sub_ids_stmt = sub_ids_stmt.where(
+                    or_(
+                        User.reports_to_id == current_user.id,
+                        User.reports_to_id.in_(tl_ids_stmt),
+                    )
+                )
             stmt = stmt.where(
                 or_(
                     Task.assigned_to_id == current_user.id,

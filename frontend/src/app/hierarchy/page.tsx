@@ -285,7 +285,6 @@ export default function HierarchyPage() {
                 { role: "STAFF", title: "Operational Staff", color: "slate" },
               ] as const
             ).map((group) => {
-              if (user?.role === "IN_CHARGE" && group.role === "STAFF") return null;
               const members = roleGroups[group.role] || [];
               if (members.length === 0) return null;
 
@@ -555,9 +554,7 @@ const TreeNode: React.FC<{
   viewerRole?: Role;
 }> = ({ node, level, canManageLeave, onToggleLeave, viewerRole }) => {
   const [expanded, setExpanded] = useState(true);
-  // In-Charge level 3 provision: cannot see users under team leader in org tree
-  const isBlockedUnderTeamLeader = viewerRole === "IN_CHARGE" && node.role === "TEAM_LEADER";
-  const hasChildren = !isBlockedUnderTeamLeader && node.subordinates && node.subordinates.length > 0;
+  const hasChildren = node.subordinates && node.subordinates.length > 0;
 
   return (
     <div className="text-xs">
@@ -636,7 +633,7 @@ const TreeNode: React.FC<{
         </div>
       </div>
 
-      {hasChildren && expanded && !isBlockedUnderTeamLeader && (
+      {hasChildren && expanded && (
         <div className="border-l-2 border-indigo-100 dark:border-slate-800 ml-4 pl-2 space-y-2 mt-2">
           {node.subordinates.map((subNode: any) => (
             <TreeNode

@@ -751,6 +751,7 @@ class AttendanceService:
                 )
             return query
         elif current_user.role == Role.IN_CHARGE:
+            tl_ids_stmt = select(User.id).where(User.reports_to_id == current_user.id)
             return query.where(
                 or_(
                     User.id == current_user.id,
@@ -759,6 +760,7 @@ class AttendanceService:
                         User.department == current_user.department,
                     ),
                     User.reports_to_id == current_user.id,
+                    User.reports_to_id.in_(tl_ids_stmt),
                 )
             )
         elif current_user.role == Role.TEAM_LEADER:
@@ -1014,12 +1016,14 @@ class AttendanceService:
                         )
                     )
             elif current_user.role == Role.IN_CHARGE:
+                tl_ids_stmt = select(User.id).where(User.reports_to_id == current_user.id)
                 conds = []
                 if current_user.branch and current_user.branch.strip():
                     conds.append(func.lower(func.trim(user_alias.branch)) == current_user.branch.strip().lower())
                 if current_user.department and current_user.department.strip():
                     conds.append(func.lower(func.trim(user_alias.department)) == current_user.department.strip().lower())
                 conds.append(user_alias.reports_to_id == current_user.id)
+                conds.append(user_alias.reports_to_id.in_(tl_ids_stmt))
                 if conds:
                     stmt = stmt.where(or_(*conds))
             elif current_user.role == Role.TEAM_LEADER:

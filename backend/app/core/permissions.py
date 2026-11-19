@@ -135,11 +135,13 @@ def validate_can_assign_task(operator: User, assignee: User) -> None:
         raise HierarchyPermissionError("Admin can only assign tasks up to Staff level (In-charge, Team Leader, Staff).")
 
     if operator.role == Role.IN_CHARGE:
-        # Up to staff level (Team Leader, Staff in department)
+        # Up to staff level (Team Leader, Staff in department or reporting line)
         if assignee.role in [Role.TEAM_LEADER, Role.STAFF]:
             op_dept = (operator.department or "").strip().lower()
             as_dept = (assignee.department or "").strip().lower()
-            if op_dept and as_dept and op_dept != as_dept and assignee.reports_to_id != operator.id:
+            is_direct = (assignee.reports_to_id == operator.id)
+            is_indirect = bool(assignee.manager and assignee.manager.reports_to_id == operator.id)
+            if op_dept and as_dept and op_dept != as_dept and not (is_direct or is_indirect):
                 raise HierarchyPermissionError(f"In-charge can only assign tasks to subordinates under their department ('{operator.department}').")
             return
         raise HierarchyPermissionError("In-charge can only assign tasks to Team Leader, Staff, or self.")
